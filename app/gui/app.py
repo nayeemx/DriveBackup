@@ -97,6 +97,13 @@ button, .q-btn, .q-link, a, .q-item, [role="button"], .q-field__input { cursor: 
 .nav-item.active { background: rgba(13,148,136,0.14) !important; color: var(--primary) !important; }
 .nav-item.active .q-icon { color: var(--primary) !important; }
 
+/* Page content: readable max width on large windows */
+.q-tab-panel { max-width: 1080px; margin: 0 auto; }
+
+/* Responsive stat cards: 2-up until wide windows */
+.stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (min-width: 1280px) { .stats-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+
 /* Markdown (analyze/report) */
 .q-markdown h3, .markdown h3 { font-size: 15px; font-weight: 600; margin: 18px 0 6px; }
 .q-markdown li, .markdown li { margin: 2px 0; }
@@ -139,15 +146,15 @@ def build(ctx: AppContext):
         with ui.row().classes("items-center gap-2"):
             ui.icon("cloud_done").classes("text-2xl").style("color: var(--primary)")
             ui.label("DriveBackup").classes("text-[15px] font-semibold tracking-tight")
-            ui.label("·").classes("opacity-30")
+            ui.label("·").classes("opacity-30 hidden sm:block")
             ui.label("Drive backup, verify & wipe").classes(
-                "text-xs").style("color: var(--muted-fg)")
+                "text-xs hidden sm:block").style("color: var(--muted-fg)")
         ui.space()
         ctx.header_status = ui.chip("Ready", icon="bolt").props(
             "outline color=primary text-color=white").classes("rounded-full")
 
-    # --- drawer ---------------------------------------------------------------
-    with ui.left_drawer(value=True, fixed=False).props("bordered").classes(
+    # --- drawer (auto-collapses on narrow windows, floating toggle appears) ---
+    with ui.left_drawer(value=None, fixed=False).props("bordered").classes(
             "bg-[#0B1220]"):
         ui.label("NAVIGATION").classes("text-[10px] font-semibold uppercase "
                                        "tracking-[0.16em] px-2 pt-4 pb-1") \
@@ -163,7 +170,7 @@ def build(ctx: AppContext):
             ui.label(f"v{APP_VERSION}").classes("text-xs").style(
                 "color: #64748B")
             ui.label("Settings → Updates").classes("text-[10px]") \
-                .style("color: #475569")
+                .style("color: #64748B")
 
     # --- footer console (collapsible) ---------------------------------------
     console_visible = ctx.config.get("console_visible", "1") != "0"

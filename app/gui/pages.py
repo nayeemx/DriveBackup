@@ -52,6 +52,11 @@ class DashboardPage:
         self.stats = {}
         self.connect_btn = None
         self.disconnect_btn = None
+        self.guide_icon = None
+        self.guide_title = None
+        self.guide_text = None
+        self.guide_btn = None
+        self._guide_step = ""
 
     def build(self, parent=None):
         with parent or nullcontext():
@@ -75,7 +80,20 @@ class DashboardPage:
                 .style(f"color:{MUTED}")
             PipelineChips(self.ctx, on_navigate=self._step_to)
 
-            with ui.grid(columns=3).classes("w-full gap-3 mt-4"):
+            with ui.card().props("flat bordered").classes("w-full mt-3"):
+                with ui.row().classes("w-full items-center gap-3 p-1 flex-wrap"):
+                    self.guide_icon = ui.icon("rocket_launch") \
+                        .classes("text-3xl shrink-0").style(f"color:{ACCENT}")
+                    with ui.column().classes("flex-1 min-w-[220px] gap-0"):
+                        self.guide_title = ui.label("").classes(
+                            "text-[15px] font-semibold")
+                        self.guide_text = ui.label("").classes(
+                            "text-xs mt-0.5").style(f"color:{MUTED}")
+                    self.guide_btn = ui.button("", icon="arrow_forward",
+                                               on_click=self._guide_action) \
+                        .props("color=primary no-caps")
+
+            with ui.element("div").classes("w-full grid stats-grid gap-3 mt-4"):
                 self.stats["state"] = StatCard("Connection", "-", "cloud_off", MUTED)
                 self.stats["total"] = StatCard("Total", "-", "storage", ACCENT)
                 self.stats["used"] = StatCard("Used", "-", "pie_chart", WARN)
@@ -84,6 +102,14 @@ class DashboardPage:
                                                 PRIMARY)
                 self.stats["files"] = StatCard("Files", "-", "description", INFO)
             self.refresh()
+
+    def _guide_action(self):
+        step = self._guide_step
+        if step == "connect":
+            self._connect()
+        elif step in ("Backup", "Verify", "Analyze", "Wipe", "Settings",
+                      "Help", "Dashboard"):
+            self.navigate(step)
 
     def _step_to(self, step):
         mapping = {"Connect": "Dashboard", "Backup": "Backup", "Verify": "Verify",
@@ -106,11 +132,42 @@ class DashboardPage:
                 self.connect_btn.set_text("Connect Google Drive")
             if self.disconnect_btn:
                 self.disconnect_btn.set_visibility(False)
+            self._guide(
+                "connect",
+                "Step 1 of 4: Connect your Google Drive",
+                "Your files are safe in Google's cloud, but DriveBackup can "
+                "only reach them after you allow access once.",
+                "Connect Google Drive")
             ctx.hub.log("WARNING", "Drive not connected - click 'Connect Google Drive'.")
             return
         self.stats["state"].set("Connected", GOOD)
         if self.disconnect_btn:
             self.disconnect_btn.set_visibility(True)
+        manifest = bk.load_manifest()
+        if not manifest:
+            self._guide(
+                "Backup",
+                "Step 2 of 4: Back up your Drive",
+                "Choose what to back up (everything, folders, or specific "
+                "files) and where to save it on this computer.",
+                "Go to Backup")
+        else:
+            ok, _msg = vf.verify_fresh(
+                hours=ctx.config.get("verify_freshness_hours", 24))
+            if not ok:
+                self._guide(
+                    "Verify",
+                    "Step 3 of 4: Verify your backup",
+                    "Checksums prove every downloaded file matches the Drive "
+                    "original. Do this before wiping anything.",
+                    "Go to Verify")
+            else:
+                self._guide(
+                    "Analyze",
+                    "Step 4 of 4: Analyze, then wipe (optional)",
+                    "See AI insights about your Drive and, when ready, wipe "
+                    "it safely - Trash first, permanent only after verify.",
+                    "Go to Analyze")
         job = ctx.jobs.get("stats")
         if job and job["running"]:
             return
@@ -142,6 +199,15 @@ class DashboardPage:
         else:
             self.stats["files"].set("0")
             self.stats["backed"].set("-")
+
+    def _guide(self, step, title, text, button_label):
+        self._guide_step = step
+        if self.guide_title:
+            self.guide_title.set_text(title)
+        if self.guide_text:
+            self.guide_text.set_text(text)
+        if self.guide_btn:
+            self.guide_btn.set_text(button_label)
 
     def _connect(self):
         ctx = self.ctx
@@ -989,6 +1055,7 @@ class WipePage:
             ui.label("Type the confirmation phrase to unlock:  DELETE ALL").classes(
                 "text-sm mt-2").style(f"color:{MUTED}")
             self.phrase = ui.input("Confirmation phrase", password=True,
+                                   password_toggle_button=True,
                                    placeholder="DELETE ALL",
                                    on_change=self._update_buttons).props(
                 "outlined").classes("w-full max-w-md")
@@ -1218,7 +1285,9 @@ class SettingsPage:
                 ui.label("Engine").classes("text-[10px] font-semibold uppercase "
                                            "tracking-[0.16em]") \
                     .style(f"color:{MUTED}")
-                with ui.grid(columns=2).classes("w-full gap-x-6 gap-y-3 mt-2"):
+                with ui.element("div").classes(
+                        "w-full grid grid-cols-1 md:grid-cols-2 gap-x-6 "
+                        "gap-y-3 mt-2"):
                     self.transfers = ui.number("Parallel downloads (transfers)",
                                                value=self.ctx.config.get("transfers"),
                                                min=1, max=16, step=1).props("outlined dense")

@@ -49,6 +49,7 @@ async def test_all_tabs_render(create_user):
     await user.should_see("Help & Guide")
     await user.should_see("Everything in my Google Drive")
     await user.should_see("What Verify does")
+    await user.should_see("Step 1 of 4: Connect your Google Drive")
 
 
 async def test_file_picker_dialog_opens(create_user):
