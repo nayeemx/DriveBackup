@@ -37,6 +37,22 @@ def page_header(icon, title, subtitle=None):
                     f"color:{MUTED}")
 
 
+def info_card(icon, title, lines, tone="info"):
+    """Compact 'what this page does' card: icon, title and bullet lines."""
+    accent = {"info": INFO, "good": GOOD, "warn": WARN, "danger": DANGER}\
+        .get(tone, INFO)
+    with ui.card().props("flat bordered").classes("w-full p-3").style(
+            f"border-color:{accent}55"):
+        with ui.row().classes("w-full items-center gap-2"):
+            ui.icon(icon).classes("text-lg").style(f"color:{accent}")
+            ui.label(title).classes("text-sm font-semibold")
+        with ui.column().classes("w-full gap-0.5 mt-1"):
+            for line in lines:
+                with ui.row().classes("items-start gap-2"):
+                    ui.label("•").classes("text-xs").style(f"color:{accent}")
+                    ui.label(line).classes("text-sm").style(f"color:{MUTED}")
+
+
 class LogConsole:
     """Live, color-coded, auto-scrolling log console."""
 
@@ -214,26 +230,47 @@ def confirm_dialog(title, message, ok_label="Continue", danger=False,
     return dlg
 
 
-def auth_url_dialog(url, on_done=None, on_cancel=None):
+def auth_url_dialog(url, on_cancel=None):
+    """Connect-flow dialog with live status so the user always knows what
+    is happening: copy URL -> open browser -> sign in -> this dialog flips
+    to 'connected' automatically and closes itself."""
+    global _CONNECT_DIALOG
     dlg = ui.dialog()
 
     def cancel():
-        dlg.close()
+        _close_connect_dialog()
         if on_cancel:
             on_cancel()
 
-    with dlg, ui.card().classes("w-[36rem] max-w-[90vw] p-4"):
-        ui.label("Authorize DriveBackup in your browser").classes(
-            "text-lg font-semibold")
-        ui.label("rclone is waiting for Google's callback. Log in with the "
-                 "Google account that owns the Drive and approve access - "
-                 "the window will close itself when connected.").classes(
-            "text-sm").style(f"color:{MUTED}")
-        with ui.row().classes("w-full items-center gap-2 mt-2"):
+    with dlg, ui.card().classes("w-[38rem] max-w-[92vw] p-5"):
+        with ui.row().classes("w-full items-center gap-3"):
+            ui.icon("link").classes("text-2xl").style(f"color:{PRIMARY}")
+            ui.label("Connect Google Drive").classes("text-lg font-semibold")
+        ui.label("3 steps, then this window updates by itself:").classes(
+            "text-sm mt-2").style(f"color:{MUTED}")
+        with ui.column().classes("w-full gap-1 mt-2"):
+            with ui.row().classes("items-start gap-2"):
+                ui.label("1").classes("w-5 h-5 rounded-full text-center "
+                                       "text-[11px] font-bold shrink-0") \
+                    .style(f"background:rgba(13,148,136,.15);color:{PRIMARY}")
+                ui.label("Click 'Open in browser' below.").classes("text-sm")
+            with ui.row().classes("items-start gap-2"):
+                ui.label("2").classes("w-5 h-5 rounded-full text-center "
+                                       "text-[11px] font-bold shrink-0") \
+                    .style(f"background:rgba(13,148,136,.15);color:{PRIMARY}")
+                ui.label("Sign in with the Google account that owns the "
+                         "Drive and approve access.").classes("text-sm")
+            with ui.row().classes("items-start gap-2"):
+                ui.label("3").classes("w-5 h-5 rounded-full text-center "
+                                       "text-[11px] font-bold shrink-0") \
+                    .style(f"background:rgba(13,148,136,.15);color:{PRIMARY}")
+                ui.label("Come back here - it connects automatically.")\
+                    .classes("text-sm")
+        with ui.row().classes("w-full items-center gap-2 mt-3"):
             ui.input("Authorization URL", value=url).props(
                 "readonly outlined dense").classes("flex-1")
             ui.button(icon="content_copy",
-                      on_click=lambda: ui.clipboard.write(url))\
+                      on_click=lambda: ui.clipboard.write(url)) \
                 .props("outline").tooltip("Copy URL")
         with ui.row().classes("w-full justify-end gap-2 mt-3"):
             ui.button("Open in browser", icon="open_in_new",
@@ -241,10 +278,57 @@ def auth_url_dialog(url, on_done=None, on_cancel=None):
                 "color=primary no-caps")
             ui.button("Cancel connection", icon="close",
                       on_click=cancel).props("flat")
+        status_row = ui.row().classes("w-full items-center gap-2 mt-4 p-3 "
+                                      "rounded-lg").style(
+            f"background:rgba(56,189,248,0.07);border:1px solid rgba(56,189,248,.25)")
+        with status_row:
+            spinner = ui.spinner(size="18px")
+            status = ui.label("Waiting for you to complete the sign-in in "
+                              "your browser ...").classes("text-sm")
+            status.style(f"color:{INFO}")
     dlg.open()
-    if on_done:
-        dlg.on_close(lambda: on_done())
+    _CONNECT_DIALOG = {"dialog": dlg, "status": status, "spinner": spinner,
+                       "row": status_row}
     return dlg
+
+
+_CONNECT_DIALOG = None
+
+
+def _close_connect_dialog():
+    global _CONNECT_DIALOG
+    if _CONNECT_DIALOG:
+        try:
+            _CONNECT_DIALOG["dialog"].close()
+        except Exception:
+            pass
+        _CONNECT_DIALOG = None
+
+
+def connect_dialog_status(message, ok=False):
+    """Update the connect dialog: waiting -> success / failure."""
+    global _CONNECT_DIALOG
+    if not _CONNECT_DIALOG:
+        return
+    entry = _CONNECT_DIALOG
+    try:
+        if ok:
+            entry["spinner"].delete()
+            entry["row"].style(
+                f"background:rgba(34,197,94,0.08);"
+                f"border:1px solid rgba(34,197,94,.35)")
+            entry["status"].set_text(message)
+            entry["status"].style(f"color:{GOOD}")
+            ui.timer(1.4, _close_connect_dialog, once=True)
+        else:
+            entry["spinner"].delete()
+            entry["row"].style(
+                f"background:rgba(248,113,113,0.08);"
+                f"border:1px solid rgba(248,113,113,.35)")
+            entry["status"].set_text(message)
+            entry["status"].style(f"color:{DANGER}")
+    except Exception:
+        _CONNECT_DIALOG = None
 
 
 def code_dialog(box, event):
@@ -272,7 +356,21 @@ def code_dialog(box, event):
 
 
 def pick_directory(title="Choose a folder"):
-    """Native folder picker (Windows). Blocks while open, returns path or None."""
+    """Native folder picker (Windows).
+
+    Prefers the app window's native dialog (fast, runs in the window
+    process) and falls back to a Tk dialog when running in a plain browser.
+    """
+    try:
+        from nicegui import app as napp
+        import webview
+        nw = napp.native.window
+        if nw is not None:
+            result = nw.create_file_dialog(webview.FOLDER_DIALOG)
+            if result:
+                return str(result[0])
+    except Exception:
+        pass
     import tkinter as tk
     from tkinter import filedialog
     root = tk.Tk()

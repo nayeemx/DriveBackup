@@ -285,6 +285,28 @@ class RcloneManager:
                 parsed[key.strip().lower()] = value.strip()
         return parsed
 
+    def about_cached(self, remote, ttl=60):
+        """about() with a short TTL cache.
+
+        The UI polls stats regularly; hitting the network (and Google's
+        rate limits) every page build makes rclone about take 3-5s, which
+        must never block the event loop.
+        """
+        import time
+        cache = getattr(self, "_about_cache", {})
+        cached, ts = cache.get(remote, (None, 0))
+        now = time.time()
+        if cached is not None and now - ts < ttl:
+            return cached
+        try:
+            result = self.about(remote)
+        except Exception:
+            if cached is not None:
+                return cached
+            raise
+        self._about_cache = {**cache, remote: (result, now)}
+        return result
+
     def lsjson(self, remote, root="", trashed=False):
         args = ["lsjson", "--recursive", "--files-only", "--hash",
                 "--fast-list", "-M"]
@@ -300,22 +322,23 @@ class RcloneManager:
         except (ValueError, json.JSONDecodeError) as exc:
             raise RcloneError(f"Failed to parse lsjson output: {exc}") from exc
 
-    def copy(self, remote, local_dir, transfers, checkers, line_cb, root=""):
-        return self.stream(
-            [
-                "copy", f"{remote}:{root}", str(local_dir),
-                "--create-empty-src-dirs",
-                "--checksum",
-                "--fast-list",
-                "--transfers", str(transfers),
-                "--checkers", str(checkers),
-                "--stats", "2s",
-                "--stats-one-line",
-                "--stats-log-level", "NOTICE",
-                "-v",
-            ],
-            line_cb,
-        )
+    def copy(self, remote, local_dir, transfers, checkers, line_cb, root="",
+             extra_args=None):
+        args = [
+            "copy", f"{remote}:{root}", str(local_dir),
+            "--create-empty-src-dirs",
+            "--checksum",
+            "--fast-list",
+            "--transfers", str(transfers),
+            "--checkers", str(checkers),
+            "--stats", "2s",
+            "--stats-one-line",
+            "--stats-log-level", "NOTICE",
+            "-v",
+        ]
+        if extra_args:
+            args += list(extra_args)
+        return self.stream(args, line_cb)
 
     def check(self, remote, local_dir, transfers, checkers, download, line_cb,
               root=""):

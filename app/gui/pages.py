@@ -5,7 +5,7 @@ from nicegui import ui
 
 from .widgets import (ACCENT, DANGER, GOOD, INFO, MUTED, PRIMARY, WARN,
                       LogConsole, PipelineChips, StatCard, confirm_dialog,
-                      open_in_explorer, page_header, pick_directory)
+                      info_card, open_in_explorer, page_header, pick_directory)
 
 from ..ai import analyzer as ai_analyzer
 from ..ai import llm
@@ -49,6 +49,7 @@ class DashboardPage:
         self.ctx = ctx
         self.navigate = navigate
         self.stats = {}
+        self.connect_btn = None
 
     def build(self, parent=None):
         with parent or nullcontext():
@@ -58,8 +59,9 @@ class DashboardPage:
                 "Back up everything, verify it, then safely wipe your Drive - "
                 "with AI analysis in between.")
             with ui.row().classes("w-full items-center gap-2 mb-4"):
-                ui.button("Connect Google Drive", icon="link",
-                          on_click=self._connect).props("color=primary no-caps")
+                self.connect_btn = ui.button("Connect Google Drive", icon="link",
+                                             on_click=self._connect)\
+                    .props("color=primary no-caps")
                 ui.button("Refresh", icon="refresh", on_click=self.refresh)\
                     .props("outline no-caps")
 
@@ -92,18 +94,38 @@ class DashboardPage:
             self.stats["total"].set("-")
             self.stats["used"].set("-")
             self.stats["free"].set("-")
+            self.stats["files"].set("-")
+            self.stats["backed"].set("-")
+            if self.connect_btn:
+                self.connect_btn.enable()
+                self.connect_btn.set_text("Connect Google Drive")
             ctx.hub.log("WARNING", "Drive not connected - click 'Connect Google Drive'.")
-        else:
-            self.stats["state"].set("Connected", GOOD)
-            try:
-                about = ctx.manager.about(remote)
-                for key, stat in (("Total", "total"), ("Used", "used"),
-                                  ("Free", "free")):
-                    if key in about:
-                        self.stats[stat].set(about[key])
-            except Exception as exc:
-                ctx.hub.log("ERROR", f"Could not read drive stats: {exc}")
-        inv = bk.load_inventory()
+            return
+        self.stats["state"].set("Connected", GOOD)
+        job = ctx.jobs.get("stats")
+        if job and job["running"]:
+            return
+        self.stats["total"].set("...")
+        self.stats["used"].set("...")
+        self.stats["free"].set("...")
+        ctx.start_job(
+            "stats",
+            lambda hub: (ctx.manager.about_cached(remote),
+                         bk.load_inventory()),
+            on_done=self._stats_done,
+        )
+
+    def _stats_done(self, result, error):
+        ctx = self.ctx
+        ctx.finish_job("stats")
+        if error:
+            ctx.hub.log("ERROR", f"Could not read drive stats: {error}")
+            return
+        about, inv = result or ({}, None)
+        for key, stat in (("Total", "total"), ("Used", "used"),
+                          ("Free", "free")):
+            if key in about:
+                self.stats[stat].set(about[key])
         if inv:
             total = sum(f.get("Size", 0) for f in inv)
             self.stats["files"].set(f"{_fmt(len(inv))}")
@@ -114,6 +136,9 @@ class DashboardPage:
 
     def _connect(self):
         ctx = self.ctx
+        if self.connect_btn:
+            self.connect_btn.disable()
+            self.connect_btn.set_text("Connecting ...")
         ctx.start_job(
             "connect",
             lambda hub: ctx.manager.connect(
@@ -126,11 +151,17 @@ class DashboardPage:
         )
 
     def _connect_done(self, result, error):
+        from .widgets import connect_dialog_status
         self.ctx.finish_job("connect")
+        if self.connect_btn:
+            self.connect_btn.enable()
+            self.connect_btn.set_text("Connect Google Drive")
         if error:
+            connect_dialog_status(f"Connection failed: {error}", ok=False)
             ui.notify(f"Connection failed: {error}", type="negative",
                       position="top-right")
             return
+        connect_dialog_status("Connected! Google Drive is ready.", ok=True)
         self.ctx.hub.log("SUCCESS", "Google Drive connected.")
         ui.notify("Google Drive connected", type="positive", position="top-right")
         self.refresh()
@@ -145,24 +176,63 @@ class BackupPage:
         self.progress_label = None
         self.summary = None
         self.running = False
+        self.scope_radio = None
+        self.folders_input = None
+        self.skip_input = None
+        self.scope_summary = None
 
     def build(self, parent=None):
         with parent or nullcontext():
             page_header(
                 "cloud_download",
                 "Backup",
-                "Every file and folder on Google Drive is downloaded here, then a "
-                "manifest (paths + checksums) is saved. Google Docs / Sheets / "
-                "Slides are exported (docx / xlsx / pptx) so nothing is lost.")
+                "Downloads the files you choose from Google Drive to a local "
+                "folder and saves a manifest (paths + checksums) for Verify.")
+            info_card(
+                "help",
+                "What happens when you click Start Backup",
+                ["Every file in the scope below is downloaded into the "
+                 "destination folder (an empty folder on your PC or an "
+                 "external drive).",
+                 "Google Docs / Sheets / Slides are exported as docx / xlsx / "
+                 "pptx so nothing is lost.",
+                 "Afterwards a manifest is saved - Verify and Wipe use it."])
             with ui.card().props("flat bordered").classes("w-full"):
                 with ui.row().classes("w-full items-center gap-2"):
                     self.dir_input = ui.input(
-                        "Backup destination",
+                        "Where to save the backup",
                         placeholder="Choose an EMPTY local folder "
                                     "(external drive, NAS, ...)").props(
                         "outlined dense").classes("flex-1")
                     ui.button("Browse", icon="folder_open",
                               on_click=self._browse).props("outline no-caps")
+
+            with ui.card().props("flat bordered").classes("w-full mt-3"):
+                ui.label("WHAT TO BACK UP").classes(
+                    "text-[10px] font-semibold uppercase tracking-[0.16em]") \
+                    .style(f"color:{MUTED}")
+                self.scope_radio = ui.radio({
+                    "all": "Everything in my Google Drive",
+                    "only": "Only these folders",
+                    "skip": "Everything except folders I list",
+                }, value="all", on_change=self._scope_changed)\
+                    .props("dense").classes("mt-2")
+                self.folders_input = ui.textarea(
+                    "Folders to back up - one per line, e.g.  Documents  or  "
+                    "Photos/2026  (case-sensitive)",
+                    placeholder="Documents\nPhotos/2026\nWork/Projects") \
+                    .props("outlined dense autogrow").classes(
+                    "w-full max-w-xl mt-2").bind_visibility_from(
+                    self.scope_radio, "value", value="only")
+                self.skip_input = ui.textarea(
+                    "Folders to SKIP - one per line (everything else is "
+                    "backed up)",
+                    placeholder="Videos\nDownloads/temp") \
+                    .props("outlined dense autogrow").classes(
+                    "w-full max-w-xl mt-2").bind_visibility_from(
+                    self.scope_radio, "value", value="skip")
+                self.scope_summary = ui.label("").classes("text-sm mt-2") \
+                    .style(f"color:{INFO}")
 
             self.start_btn = ui.button("Start Backup", icon="download",
                                        on_click=self._run).props(
@@ -173,6 +243,53 @@ class BackupPage:
                 self.progress_label = ui.label("Idle").classes(
                     "text-xs").style(f"color:{MUTED}")
             self.summary = ui.label("").classes("text-sm").style(f"color:{GOOD}")
+            self._scope_changed()
+
+    def _scope_changed(self):
+        self._update_scope_summary()
+
+    def _folder_lines(self, widget):
+        return [ln.strip("/ ").strip() for ln in (widget.value or "").splitlines()
+                if ln.strip()]
+
+    def _update_scope_summary(self):
+        try:
+            scope = self.scope_radio.value
+            remote = self.ctx.config.get("remote")
+            if not self.ctx.manager.remote_exists(remote):
+                self.scope_summary.set_text(
+                    "Connect Google Drive first (Dashboard) to see what will "
+                    "be backed up.")
+                return
+            inv = bk.load_inventory()
+            if not inv:
+                self.scope_summary.set_text(
+                    "No Drive listing cached yet - the exact file count is "
+                    "shown after the first backup. Everything you select "
+                    "will be downloaded to the destination folder.")
+                return
+            from ..engine.backup import _match_folders
+            only = self._folder_lines(self.folders_input)
+            skip = self._folder_lines(self.skip_input)
+            if scope == "only" and only:
+                files = [f for f in inv
+                         if _match_folders(f.get("Path") or f.get("Name"), only)]
+                label = f"Only the selected folders - {len(files)} files, " \
+                        f"{format_bytes(sum(f.get('Size', 0) for f in files))}"
+            elif scope == "skip" and skip:
+                files = [f for f in inv
+                         if not _match_folders(f.get("Path") or f.get("Name"),
+                                               skip)]
+                label = f"Everything except the skipped folders - " \
+                        f"{len(files)} files, " \
+                        f"{format_bytes(sum(f.get('Size', 0) for f in files))}"
+            else:
+                files = inv
+                label = f"Everything in your Drive - {len(files)} files, " \
+                        f"{format_bytes(sum(f.get('Size', 0) for f in files))}"
+            self.scope_summary.set_text(f"Scope: {label}")
+        except Exception:
+            self.scope_summary.set_text("")
 
     def _browse(self):
         path = pick_directory("Choose backup destination")
@@ -188,6 +305,15 @@ class BackupPage:
         if not self.ctx.manager.remote_exists(remote):
             ui.notify("Connect Google Drive first (Dashboard).", type="warning")
             return
+        scope = self.scope_radio.value
+        only = self._folder_lines(self.folders_input) if scope == "only" else []
+        skip = self._folder_lines(self.skip_input) if scope == "skip" else []
+        if scope == "only" and not only:
+            ui.notify("List at least one folder to back up.", type="warning")
+            return
+        if scope == "skip" and not skip:
+            ui.notify("List at least one folder to skip.", type="warning")
+            return
         cfg = self.ctx.config
         self.running = True
         self.start_btn.disable()
@@ -201,6 +327,8 @@ class BackupPage:
                 checkers=int(cfg.get("checkers")),
                 line_cb=lambda m: hub.log("INFO", m),
                 progress_cb=lambda p, t: hub.progress(p, t),
+                include_folders=only or None,
+                exclude_folders=skip or None,
             ),
             on_progress=self._on_progress,
             on_done=self._on_done,
@@ -232,6 +360,7 @@ class BackupPage:
         self.progress_label.set_text("Backup complete")
         ui.notify("Backup complete", type="positive", position="top-right")
         self.ctx.hub.log("SUCCESS", f"Backup manifest saved to {result['manifest']}")
+        self._update_scope_summary()
 
 
 class VerifyPage:
@@ -249,9 +378,18 @@ class VerifyPage:
             page_header(
                 "fact_check",
                 "Verify",
-                "Compares every backed-up file against the manifest "
-                "(size + MD5 checksum). Nothing on Google Drive is touched "
-                "by this step.")
+                "Proves your backup really matches Google Drive - the gate "
+                "that unlocks Wipe.")
+            info_card(
+                "fact_check",
+                "What Verify does",
+                ["Checks every backed-up file (size + checksum) against the "
+                 "manifest saved during Backup.",
+                 "Nothing is downloaded again and NOTHING on Google Drive is "
+                 "touched or changed.",
+                 "Wipe stays locked until this passes. Deep check goes one "
+                 "step further: it re-downloads files from Drive and compares "
+                 "them (extra safety, uses your data allowance)."])
             with ui.card().props("flat bordered").classes("w-full"):
                 with ui.row().classes("items-center gap-2"):
                     self.verify_btn = ui.button("Verify backup", icon="fact_check",
@@ -263,8 +401,11 @@ class VerifyPage:
                     ui.switch("Download & compare against Drive (slower, extra "
                               "safety)").bind_value(self, "deep").props("dense")
 
-            self.status = ui.label("No verification yet.").classes(
+            self.status = ui.label("No verification yet - run 'Verify backup' "
+                                   "after your first Backup.").classes(
                 "text-sm font-semibold mt-4")
+            self.freshness = ui.label("").classes("text-xs mt-1") \
+                .style(f"color:{MUTED}")
             with ui.column().classes("w-full gap-1 mt-2"):
                 self.progress = ui.linear_progress(value=0, show_value=False) \
                     .props("color=primary").classes("w-full")
@@ -289,9 +430,23 @@ class VerifyPage:
                 f"{label} at {data.get('created', '?')} - {data.get('matched', 0)} OK, "
                 f"{data.get('missing', 0)} missing, {data.get('mismatch', 0)} mismatched")
             self.status.style(f"color: {color}")
+            hours = self.ctx.config.get("verify_freshness_hours", 24)
+            try:
+                from datetime import datetime, timedelta
+                created = datetime.fromisoformat(data["created"])
+                age = (datetime.now() - created).total_seconds() / 3600
+                left = max(0.0, hours - age)
+                self.freshness.set_text(
+                    f"Result is {age:.1f} hours old - Wipe stays unlocked for "
+                    f"another {left:.1f} hours (or re-verify anytime).")
+            except Exception:
+                self.freshness.set_text(
+                    f"Wipe window: {hours} hours after a passing verify.")
         else:
-            self.status.set_text("No verification yet.")
+            self.status.set_text("No verification yet - run 'Verify backup' "
+                                 "after your first Backup.")
             self.status.style(f"color: {MUTED}")
+            self.freshness.set_text("")
 
     def _verify(self):
         self.verify_btn.disable()
@@ -396,13 +551,24 @@ class AnalyzePage:
                 "analytics",
                 "Analyze",
                 "Understand what's in your Drive: duplicates, junk and the "
-                "largest files - plus an optional AI summary.")
-            with ui.row().classes("w-full items-center gap-2 mb-2"):
+                "largest files - plus an optional AI report.")
+            info_card(
+                "analytics",
+                "What Analyze does",
+                ["Scans your backup listing: file categories, largest files, "
+                 "duplicate groups, junk and empty files - all locally, "
+                 "nothing leaves your PC.",
+                 "With an AI key (Settings) you can also get a plain-language "
+                 "summary, a quality check and an organization plan.",
+                 "Report saves a full Markdown document to "
+                 "%APPDATA%\\DriveBackup\\reports\\ - open it with any text "
+                 "editor."])
+            with ui.row().classes("w-full items-center gap-2 mb-2 flex-wrap"):
                 ui.button("Analyze Drive", icon="analytics",
                           on_click=self._analyze).props("color=primary no-caps")
                 ui.button("Generate Report", icon="description",
                           on_click=self._report).props("outline no-caps")
-                ui.button("AI Summary (Gemini)", icon="auto_awesome",
+                ui.button("AI Summary", icon="auto_awesome",
                           on_click=self._ai).props("outline no-caps")
                 ui.button("AI Quality Check", icon="fact_check",
                           on_click=self._quality).props("outline no-caps")
@@ -522,7 +688,7 @@ class AnalyzePage:
         if error:
             ui.notify(f"AI summary failed: {error}", type="negative")
             return
-        self.details.set_content(f"## AI Summary (Gemini)\n\n{result}")
+        self.details.set_content(f"## AI Summary\n\n{result}")
         ui.notify("AI summary ready", type="positive", position="top-right")
 
     def _quality(self):
@@ -555,7 +721,7 @@ class AnalyzePage:
                       "nothing usable).", type="positive", position="top-right")
             return
         colors = {"high": DANGER, "medium": "#F59E0B", "low": INFO}
-        lines = ["## AI Findings (Gemini)"]
+        lines = ["## AI Findings"]
         for f in result:
             lines.append(f"- **{f['severity'].upper()}** *({colors[f['severity']]})*: "
                          f"{f['message']}")
@@ -587,21 +753,52 @@ class WipePage:
         self.trash_btn = None
         self.empty_btn = None
         self.purge_btn = None
+        self.inv_table = None
+        self.inv_summary = None
 
     def build(self, parent=None):
         with parent or nullcontext():
             page_header(
                 "delete_forever",
                 "Wipe",
-                "Only files in YOUR Google Drive are affected. Gmail, Contacts "
-                "and Photos are NOT touched. Files others shared with you are "
-                "only removed from your view.")
-            with ui.card().classes("w-full").props("flat bordered") \
+                "Deletes the files on your Google Drive - only after your "
+                "backup is verified.")
+            info_card(
+                "delete_forever",
+                "What Wipe deletes",
+                ["Every file in YOUR Google Drive that you backed up "
+                 "(the scope you chose on the Backup page).",
+                 "Only Google Drive is affected - Gmail, Contacts and Photos "
+                 "are NOT touched.",
+                 "Files others shared with you are only removed from your "
+                 "view, not deleted.",
+                 "Wipe is a safety-gated 2-step flow: 1) everything moves to "
+                 "the Trash (recoverable), 2) you empty the Trash (permanent)."],
+                tone="danger")
+            with ui.row().classes("w-full items-center gap-2 mt-2"):
+                ui.button("Preview Drive contents", icon="list",
+                          on_click=self._show_inventory).props(
+                    "outline no-caps")
+            self.inv_summary = ui.label("").classes("text-xs mt-1") \
+                .style(f"color:{MUTED}")
+            self.inv_table = ui.table(
+                columns=[
+                    {"name": "path", "label": "File / folder path",
+                     "field": "path", "sortable": True},
+                    {"name": "size", "label": "Size", "field": "size",
+                     "sortable": True},
+                ],
+                rows=[],
+                row_key="path",
+            ).classes("w-full mt-2")
+            self.inv_table.props('flat bordered dense')
+            self.inv_table.set_visibility(False)
+            with ui.card().classes("w-full mt-2").props("flat bordered") \
                     .style("border-color: rgba(220,38,38,0.45)"):
                 with ui.row().classes("w-full items-center gap-3 p-1"):
                     ui.icon("warning").classes("text-3xl") \
                         .style(f"color:{DANGER}")
-                    ui.label("Wipe Google Drive - the dangerous part").classes(
+                    ui.label("The dangerous part").classes(
                         "text-lg font-semibold").style(f"color:#FCA5A5")
 
             self.gate = ui.label("").classes("text-sm font-semibold mt-4")
@@ -627,6 +824,25 @@ class WipePage:
                     "color=negative no-caps")
             self._update_gate()
             self.ctx.after_verify.append(self._update_gate)
+
+    def _show_inventory(self):
+        inv = bk.load_inventory()
+        if not inv:
+            ui.notify("No Drive listing yet - run a Backup first "
+                      "(the listing is captured during Backup).",
+                      type="warning", position="top-right")
+            self.inv_table.set_visibility(False)
+            self.inv_summary.set_text("")
+            return
+        rows = [{"path": f.get("Path") or f.get("Name"),
+                 "size": format_bytes(f.get("Size", 0))} for f in inv]
+        self.inv_table.update_rows(rows)
+        self.inv_table.set_visibility(True)
+        total = sum(f.get("Size", 0) for f in inv)
+        self.inv_summary.set_text(
+            f"{_fmt(len(inv))} files, {format_bytes(total)} - these are the "
+            "files 'Move to Trash' will delete from your Drive.")
+        ui.notify(f"{len(rows)} files in scope", type="info", position="top-right")
 
     def _update_gate(self):
         ok, msg = vf.verify_fresh(hours=self.ctx.config.get("verify_freshness_hours", 24))
@@ -880,3 +1096,117 @@ class SettingsPage:
                 (self.auto_update.value or "prompt").strip())
         self.ctx.hub.log("SUCCESS", "Settings saved.")
         ui.notify("Settings saved", type="positive", position="top-right")
+
+
+class HelpPage:
+    def __init__(self, ctx):
+        self.ctx = ctx
+
+    def build(self, parent=None):
+        with parent or nullcontext():
+            page_header("help", "Help & Guide",
+                        "How DriveBackup works, step by step - in plain language.")
+            with ui.card().classes("w-full max-w-3xl").props("flat bordered"):
+                ui.label("The 5-step journey").classes(
+                    "text-[10px] font-semibold uppercase tracking-[0.16em]") \
+                    .style(f"color:{MUTED}")
+                steps = [
+                    ("1. Connect", "Dashboard - Connect Google Drive",
+                     "One click, sign in with Google in your browser, come "
+                     "back. That's it - the app is ready."),
+                    ("2. Back up", "Backup tab",
+                     "Choose a local folder (an empty one, on your PC or an "
+                     "external drive) and what to back up: everything, or "
+                     "only certain folders. The app downloads each file and "
+                     "saves a manifest."),
+                    ("3. Verify", "Verify tab",
+                     "The app checks that every file exists locally and has "
+                     "the right size and checksum. Wipe stays locked until "
+                     "this passes - this is the guard against deleting "
+                     "something you don't actually have."),
+                    ("4. Analyze (optional)", "Analyze tab",
+                     "See what's in your Drive: duplicates, junk, largest "
+                     "files. Optional AI summary with your own key in "
+                     "Settings."),
+                    ("5. Wipe", "Wipe tab",
+                     "Only once backup + verify passed: move everything to "
+                     "the Trash, then empty the Trash. Nothing is deleted "
+                     "before you confirm twice with the phrase DELETE ALL."),
+                ]
+                for title, where, body in steps:
+                    num = title.split(".", 1)[0].strip()
+                    with ui.row().classes("w-full items-start gap-3 mt-3"):
+                        with ui.element("div").classes(
+                                "w-8 h-8 rounded-lg flex items-center justify-center "
+                                "shrink-0").style(
+                                f"background:rgba(13,148,136,0.12); color:{PRIMARY}"):
+                            ui.label(num).classes("text-sm font-semibold")
+                        with ui.column().classes("gap-0 flex-1"):
+                            ui.label(f"{title} - {where}").classes(
+                                "text-sm font-semibold")
+                            ui.label(body).classes("text-sm") \
+                                .style(f"color:{MUTED}")
+
+            with ui.card().classes("w-full max-w-3xl mt-3").props("flat bordered"):
+                ui.label("Common questions").classes(
+                    "text-[10px] font-semibold uppercase tracking-[0.16em]") \
+                    .style(f"color:{MUTED}")
+                faqs = [
+                    ("Is my data safe?",
+                     "Yes. Everything stays on your PC. Only the optional AI "
+                     "features send file names/sizes to the AI provider you "
+                     "configure in Settings."),
+                    ("Where is the backup stored?",
+                     "In the folder you choose on the Backup tab. The manifest "
+                     "and reports live in %APPDATA%\\DriveBackup."),
+                    ("Does Wipe touch Gmail or Photos?",
+                     "No. Only files in your Google Drive are affected."),
+                    ("What happens to shared files?",
+                     "Files others shared with you are only removed from your "
+                     "view, never deleted."),
+                    ("The app seems slow to start?",
+                     "First launch compiles the UI; later launches are fast. "
+                     "If it still feels slow, check Settings > Check for "
+                     "updates - newer versions fix this."),
+                ]
+                for q, a in faqs:
+                    ui.label(q).classes("text-sm font-semibold mt-3")
+                    ui.label(a).classes("text-sm").style(f"color:{MUTED}")
+
+            with ui.card().classes("w-full max-w-3xl mt-3").props("flat bordered"):
+                ui.label("Where things live").classes(
+                    "text-[10px] font-semibold uppercase tracking-[0.16em]") \
+                    .style(f"color:{MUTED}")
+                for path, what in [
+                    (str(state_path("")), "Manifest, inventory, verify result, "
+                                          "reports, logs"),
+                    (str(Path.home() / "DriveBackup"), "Default backup folder "
+                                                       "(choose your own on the "
+                                                       "Backup tab)"),
+                ]:
+                    with ui.row().classes("w-full items-center gap-2 mt-2"):
+                        ui.label(path).classes("text-xs flex-1") \
+                            .style(f"color:{INFO}")
+                        ui.label(what).classes("text-xs") \
+                            .style(f"color:{MUTED}")
+
+            with ui.card().classes("w-full max-w-3xl mt-3").props("flat bordered"):
+                ui.label("Troubleshooting").classes(
+                    "text-[10px] font-semibold uppercase tracking-[0.16em]") \
+                    .style(f"color:{MUTED}")
+                for q, a in [
+                    ("Connect keeps failing",
+                     "Sign out of Google in the browser and try again. The "
+                     "app never sees your password - only Google does."),
+                    ("Backup says the folder must be empty",
+                     "Choose a new empty folder, or move the existing files "
+                     "out first - the app refuses to mix backups."),
+                    ("Verify fails on some files",
+                     "Delete the failing file locally and re-run Backup - the "
+                     "app will re-download it and refresh the manifest."),
+                    ("Everything else",
+                     "Open %APPDATA%\\DriveBackup\\logs - the log lines show "
+                     "exactly what each step did."),
+                ]:
+                    ui.label(q).classes("text-sm font-semibold mt-3")
+                    ui.label(a).classes("text-sm").style(f"color:{MUTED}")

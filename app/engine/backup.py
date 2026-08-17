@@ -110,8 +110,44 @@ def is_exported(mime: str) -> bool:
     return bool(mime) and mime.startswith("application/vnd.google-apps")
 
 
+def _match_folders(path: str, prefixes):
+    """True if `path` is inside any of the given folder prefixes.
+
+    Prefixes are drive folder names or paths like "Documents" or
+    "Photos/2026". Matching is exact-folder aware ("Docs" does not match
+    "Documents").
+    """
+    for prefix in prefixes:
+        p = prefix.strip("/")
+        if not p:
+            continue
+        if path == p or path.startswith(p + "/"):
+            return True
+    return False
+
+
+def _scope_filters(include_folders=None, exclude_folders=None):
+    """rclone filter args that restrict a copy to the chosen folders.
+
+    include-mode: --include "/<folder>/**" for each folder + --exclude "*"
+    (only these folders). exclude-mode: --exclude "/<folder>/**" for each
+    folder (everything else).
+    """
+    args = []
+    includes = [f.strip("/") for f in (include_folders or []) if f.strip()]
+    excludes = [f.strip("/") for f in (exclude_folders or []) if f.strip()]
+    for folder in includes:
+        args += ["--include", f"/{folder}/**"]
+    if includes:
+        args += ["--exclude", "*"]
+    for folder in excludes:
+        args += ["--exclude", f"/{folder}/**"]
+    return args
+
+
 def backup(remote: str, local_dir, transfers=4, checkers=8,
-           line_cb=LOG.info, progress_cb=None, root=""):
+           line_cb=LOG.info, progress_cb=None, root="",
+           include_folders=None, exclude_folders=None):
     local_dir = Path(local_dir)
     local_dir.mkdir(parents=True, exist_ok=True)
     if any(local_dir.iterdir()):
@@ -127,6 +163,24 @@ def backup(remote: str, local_dir, transfers=4, checkers=8,
              f"{format_bytes(sum(f.get('Size', 0) for f in inventory))} total")
     if not inventory:
         raise RcloneError("Your Drive appears to be empty - nothing to back up.")
+
+    includes = [f.strip("/") for f in (include_folders or []) if f.strip()]
+    excludes = [f.strip("/") for f in (exclude_folders or []) if f.strip()]
+    if includes or excludes:
+        def in_scope(item):
+            path = item.get("Path") or item.get("Name") or ""
+            if includes and not _match_folders(path, includes):
+                return False
+            if excludes and _match_folders(path, excludes):
+                return False
+            return True
+        before = len(inventory)
+        inventory = [f for f in inventory if in_scope(f)]
+        LOG.info(f"Folder scope kept {len(inventory)} of {before} files")
+        if not inventory:
+            raise RcloneError(
+                "No files match your selected folders. Check the folder "
+                "names (they are case-sensitive) and try again.")
     state_path("inventory.json").write_text(
         json.dumps(inventory, indent=1), encoding="utf-8")
 
@@ -149,7 +203,9 @@ def backup(remote: str, local_dir, transfers=4, checkers=8,
                 pass
         line_cb(line)
 
-    manager.copy(remote, local_dir, transfers, checkers, on_line, root=root)
+    filters = _scope_filters(includes, excludes)
+    manager.copy(remote, local_dir, transfers, checkers, on_line, root=root,
+                 extra_args=filters)
 
     if progress_cb:
         progress_cb(0.95, "Computing local checksums ...")

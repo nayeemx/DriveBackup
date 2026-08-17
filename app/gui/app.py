@@ -5,8 +5,8 @@ import threading
 from nicegui import app, ui
 
 from .context import AppContext
-from .pages import (AnalyzePage, BackupPage, DashboardPage, SettingsPage,
-                    VerifyPage, WipePage, apply_update)
+from .pages import (AnalyzePage, BackupPage, DashboardPage, HelpPage,
+                    SettingsPage, VerifyPage, WipePage, apply_update)
 from ..utils.version import APP_VERSION
 from .widgets import LogConsole, code_dialog, auth_url_dialog, confirm_dialog
 from ..utils.updater import check_for_update
@@ -114,7 +114,8 @@ button, .q-btn, .q-link, a, .q-item, [role="button"], .q-field__input { cursor: 
 
 NAV_ITEMS = (("Dashboard", "home"), ("Backup", "cloud_download"),
              ("Verify", "fact_check"), ("Analyze", "analytics"),
-             ("Wipe", "delete_forever"), ("Settings", "settings"))
+             ("Wipe", "delete_forever"), ("Settings", "settings"),
+             ("Help", "help"))
 
 
 def build(ctx: AppContext):
@@ -209,6 +210,8 @@ def build(ctx: AppContext):
             WipePage(ctx).build(None)
         with ui.tab_panel("Settings"):
             SettingsPage(ctx).build(None)
+        with ui.tab_panel("Help"):
+            HelpPage(ctx).build(None)
 
     tabs.on_value_change(lambda e: navigate(e.value))
     ui.timer(0.15, lambda: poll(ctx))
