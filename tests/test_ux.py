@@ -81,7 +81,7 @@ async def test_file_picker_dialog_opens(create_user):
     await user.should_see("Browse & select files")
     user.find("Browse & select files").click()
     await user.should_see("Select files to back up")
-    await user.should_see("0 of 3 files selected")
+    await user.should_see("0 of 3 files on your Drive selected")
     user.find("Wipe").click()
     await user.should_see("Select files to wipe")
     user.find("Select files to wipe").click()

@@ -238,6 +238,8 @@ class FilePickerDialog:
     Searchable + sortable table, native multi-select (shift-click selects a
     range). Returns the chosen relative paths via on_confirm. Call
     update_inventory() to refresh rows (e.g. after a fresh lsjson).
+    Your selection is kept even if you close the dialog - it only clears
+    when you hit 'Clear selection' or confirm with 'Use selected files'.
     """
 
     def __init__(self, title="Select files", subtitle=None, on_refresh=None):
@@ -249,48 +251,67 @@ class FilePickerDialog:
         self.search = None
         self.refresh_btn = None
         self.count_label = None
+        self.count_badge = None
         self._rows = []
         self._inventory = []
+        self._selected_paths = []
         self.on_confirm = None
 
     def _build(self):
         self.dialog = ui.dialog()
-        with self.dialog, ui.card().classes("w-[52rem] max-w-[94vw] h-[70vh] "
-                                            "flex flex-col p-4"):
-            with ui.row().classes("w-full items-center gap-2"):
-                ui.icon("folder_open").classes("text-xl").style(f"color:{PRIMARY}")
-                ui.label(self.title).classes("text-base font-semibold")
-            if self.subtitle:
-                ui.label(self.subtitle).classes("text-xs") \
-                    .style(f"color:{MUTED}")
-            with ui.row().classes("w-full items-center gap-2 mt-2"):
-                self.search = ui.input("Search file names",
+        with self.dialog, ui.card().classes(
+                "w-[56rem] max-w-[96vw] h-[76vh] flex flex-col gap-0 "
+                "p-0 overflow-hidden"):
+            with ui.row().classes("w-full items-center gap-3 px-5 pt-4"):
+                with ui.element("div").classes(
+                        "w-10 h-10 rounded-lg flex items-center justify-center "
+                        "shrink-0").style(
+                    f"background:rgba(13,148,136,0.12);color:{PRIMARY}"):
+                    ui.icon("folder_open").classes("text-xl")
+                with ui.column().classes("gap-0 flex-1 min-w-0"):
+                    ui.label(self.title).classes(
+                        "text-[15px] font-semibold tracking-tight")
+                    if self.subtitle:
+                        ui.label(self.subtitle).classes(
+                            "text-xs mt-0.5").style(f"color:{MUTED}")
+                self.count_badge = ui.badge("0 selected") \
+                    .props("color=primary text-color=white").classes(
+                    "rounded-full shrink-0")
+            with ui.row().classes("w-full items-center gap-2 px-5 pt-3"):
+                self.search = ui.input("Search files and folders",
                                        placeholder="type to filter ...",
                                        on_change=self._apply_filter) \
                     .props("outlined dense clearable").classes("flex-1")
                 if self.on_refresh:
-                    self.refresh_btn = ui.button("Refresh list from Drive",
+                    self.refresh_btn = ui.button("Refresh from Drive",
                                                  icon="sync",
                                                  on_click=self._refresh)\
-                        .props("flat dense no-caps")
-                ui.button("Select all", icon="checklist", on_click=self._all)\
-                    .props("flat dense no-caps")
-                ui.button("Clear", icon="clear_all", on_click=self._clear)\
-                    .props("flat dense no-caps")
+                        .props("flat dense no-caps").tooltip(
+                        "Re-read the Drive listing")
+                ui.button("Select all", icon="checklist",
+                          on_click=self._all).props("flat dense no-caps") \
+                    .tooltip("Select every file in the list")
+                ui.button("Clear selection", icon="clear_all",
+                          on_click=self._clear).props("flat dense no-caps")
             self.table = ui.table(
                 columns=[
-                    {"name": "path", "label": "File / folder path",
-                     "field": "path", "sortable": True},
+                    {"name": "name", "label": "Name", "field": "name",
+                     "sortable": True, "align": "left"},
+                    {"name": "folder", "label": "Folder", "field": "folder",
+                     "sortable": True, "align": "left"},
                     {"name": "size", "label": "Size", "field": "size",
-                     "sortable": True},
+                     "sortable": True, "align": "right"},
                 ],
                 rows=self._rows,
                 row_key="path",
                 selection="multiple",
                 on_select=self._on_select,
-            ).props('flat bordered dense').classes("w-full flex-1")
-            with ui.row().classes("w-full items-center justify-between mt-2"):
-                self.count_label = ui.label("0 of 0 files selected") \
+            ).props('flat bordered dense card-scroll') \
+                .classes("w-full flex-1 min-h-0 mx-5 my-3")
+            with ui.row().classes(
+                    "w-full items-center justify-between px-5 py-3 "
+                    "border-t").style("border-color: var(--border) !important"):
+                self.count_label = ui.label("") \
                     .classes("text-xs").style(f"color:{MUTED}")
                 with ui.row().classes("items-center gap-2"):
                     ui.button("Cancel", on_click=self._cancel).props("flat")
@@ -301,7 +322,8 @@ class FilePickerDialog:
     def _apply_filter(self):
         q = (self.search.value or "").strip().lower()
         if q:
-            rows = [r for r in self._rows if q in r["path"].lower()]
+            rows = [r for r in self._rows
+                    if q in r["path"].lower() or q in r["name"].lower()]
         else:
             rows = list(self._rows)
         self.table.update_rows(rows)
@@ -334,6 +356,7 @@ class FilePickerDialog:
 
     def _clear(self):
         self.table.selected = []
+        self._selected_paths = []
         self._sync_count()
 
     def _on_select(self, event):
@@ -342,12 +365,16 @@ class FilePickerDialog:
     def _sync_count(self):
         n = len(self.table.selected)
         total = sum(r.get("_size", 0) for r in self.table.selected)
-        self.count_label.set_text(
-            f"{n} of {len(self._inventory)} files selected"
-            + (f"  ({_human_size(total)})" if total else ""))
+        if self.count_badge:
+            self.count_badge.set_text(f"{n} selected")
+        if self.count_label:
+            self.count_label.set_text(
+                f"{n} of {len(self._inventory)} files on your Drive selected"
+                + (f"  ({_human_size(total)})" if total else ""))
 
     def _confirm(self):
         paths = [r["path"] for r in self.table.selected]
+        self._selected_paths = list(paths)
         self.dialog.close()
         if self.on_confirm:
             self.on_confirm(paths)
@@ -356,15 +383,30 @@ class FilePickerDialog:
         self.dialog.close()
 
     def open(self, inventory, on_confirm):
-        """Show the picker for the given inventory list (lsjson items)."""
+        """Show the picker for the given inventory list (lsjson items).
+
+        Keeps the previous selection across close/reopen so nothing is
+        lost if the dialog is dismissed by accident.
+        """
         if self.dialog is None:
             self._build()
         self._inventory = inventory
-        self._rows = [{"path": f.get("Path") or f.get("Name"),
-                       "size": format_bytes(f.get("Size", 0)),
-                       "_size": f.get("Size", 0)} for f in inventory]
+        self._rows = []
+        for f in inventory:
+            path = f.get("Path") or f.get("Name")
+            name = path.rsplit("/", 1)[-1]
+            folder = path.rsplit("/", 1)[0] if "/" in path else "Drive root"
+            is_dir = bool(f.get("IsDir"))
+            self._rows.append({
+                "path": path,
+                "name": name + ("/" if is_dir else ""),
+                "folder": folder,
+                "size": format_bytes(f.get("Size", 0)),
+                "_size": f.get("Size", 0),
+            })
         self.table.update_rows(self._rows)
-        self.table.selected = []
+        self.table.selected = [r for r in self.table.rows
+                               if r["path"] in self._selected_paths]
         if self.search:
             self.search.value = ""
         self.on_confirm = on_confirm
@@ -379,6 +421,7 @@ class FilePickerDialog:
         self.open(inventory, self.on_confirm)
         self.table.selected = [r for r in self.table.rows
                                if r["path"] in kept]
+        self._selected_paths = [r["path"] for r in self.table.selected]
         self._sync_count()
 
 
