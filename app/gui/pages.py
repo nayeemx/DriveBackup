@@ -99,7 +99,7 @@ class DashboardPage:
             lambda hub: ctx.manager.connect(
                 ctx.config.get("remote"),
                 ctx.config.get("export_formats"),
-                auth_cb=lambda url: hub.ask_auth_url(url),
+                auth_cb=lambda url, ce=None: hub.ask_auth_url(url, ce),
                 code_cb=lambda: hub.ask_code(),
             ),
             on_done=self._connect_done,

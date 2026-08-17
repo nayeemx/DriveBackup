@@ -214,23 +214,33 @@ def confirm_dialog(title, message, ok_label="Continue", danger=False,
     return dlg
 
 
-def auth_url_dialog(url, on_done=None):
+def auth_url_dialog(url, on_done=None, on_cancel=None):
     dlg = ui.dialog()
-    with dlg, ui.card().classes("w-[34rem] max-w-[90vw] p-4"):
-        ui.label("Step 1 - Authorize in your browser").classes("text-lg font-semibold")
-        ui.label("Log in with the Google account that owns the Drive you want to "
-                 "back up. Copy the URL and open it in your browser.").classes(
+
+    def cancel():
+        dlg.close()
+        if on_cancel:
+            on_cancel()
+
+    with dlg, ui.card().classes("w-[36rem] max-w-[90vw] p-4"):
+        ui.label("Authorize DriveBackup in your browser").classes(
+            "text-lg font-semibold")
+        ui.label("rclone is waiting for Google's callback. Log in with the "
+                 "Google account that owns the Drive and approve access - "
+                 "the window will close itself when connected.").classes(
             "text-sm").style(f"color:{MUTED}")
         with ui.row().classes("w-full items-center gap-2 mt-2"):
             ui.input("Authorization URL", value=url).props(
                 "readonly outlined dense").classes("flex-1")
-            ui.button(icon="content_copy", on_click=lambda: ui.clipboard.write(url))\
+            ui.button(icon="content_copy",
+                      on_click=lambda: ui.clipboard.write(url))\
                 .props("outline").tooltip("Copy URL")
         with ui.row().classes("w-full justify-end gap-2 mt-3"):
             ui.button("Open in browser", icon="open_in_new",
                       on_click=lambda: ui.open(url, new_tab=True)).props(
                 "color=primary no-caps")
-            ui.button("Close", on_click=dlg.close).props("flat")
+            ui.button("Cancel connection", icon="close",
+                      on_click=cancel).props("flat")
     dlg.open()
     if on_done:
         dlg.on_close(lambda: on_done())

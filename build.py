@@ -50,6 +50,7 @@ def build_package():
         "--collect-all", "nicegui",
         "--collect-all", "pywebview",
         "--add-data", f"version.txt;.",
+        "--splash", "assets/splash.png",
         "main.py",
     ]
     print(">>> PyInstaller ...")

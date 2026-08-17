@@ -165,15 +165,35 @@ class RcloneManager:
     def remote_exists(self, name):
         return f"{name}:" in self.listremotes()
 
+    def remote_usable(self, name):
+        """True if the remote actually works (has a valid token).
+
+        Requires real 'about' output (Total/Used) - an empty or missing
+        remote makes rclone return exit 0 with no output, which must NOT
+        count as usable.
+        """
+        try:
+            out = self.run(["about", f"{name}:"], capture=True, timeout=60,
+                           log_output=False)
+            return bool(out) and "total" in out.lower()
+        except RcloneError:
+            return False
+
     def connect(self, remote, export_formats, auth_cb, code_cb):
-        if self.remote_exists(remote):
+        if self.remote_exists(remote) and self.remote_usable(remote):
             return True
-        LOG.info("No remote configured - starting OAuth connection ...")
+        if self.remote_exists(remote):
+            LOG.warning("Existing remote has no working token - reconnecting ...")
+            try:
+                self.run(["config", "delete", remote], log_output=False)
+            except RcloneError:
+                pass
+            LOG.info("No remote configured - starting OAuth connection ...")
         args = [
             "config", "create", remote, "drive",
             "config_is_local=true",
             f"drive_export_formats={export_formats}",
-            "--non-interactive", "false",
+            "--non-interactive=false",
         ]
         proc = subprocess.Popen(
             [str(self.exe), "--config", str(self._token_path)] + args,
@@ -186,45 +206,72 @@ class RcloneManager:
             **_no_window_kwargs(),
         )
         url = None
-        code_written = False
+        code_sent = False
+        cancel_event = threading.Event()
+
+        def write_line(text):
+            try:
+                proc.stdin.write(text + "\n")
+                proc.stdin.flush()
+            except (BrokenPipeError, OSError, ValueError):
+                pass
 
         def read_output():
-            nonlocal url, code_written
+            nonlocal url, code_sent
             buffer = ""
             while True:
+                if cancel_event.is_set():
+                    proc.terminate()
+                    return
                 chunk = proc.stdout.read(1)
                 if not chunk:
                     break
                 buffer += chunk
                 if not url:
-                    m = re.search(r"https://accounts\.google\.com[^\s]*", buffer)
+                    m = re.search(
+                        r"https?://(?:accounts\.google\.com|127\.0\.0\.1:53682)[^\s]*",
+                        buffer)
                     if m:
                         url = m.group(0)
                         if auth_cb:
-                            auth_cb(url)
-                if not code_written and ("authorization code" in buffer.lower()
-                                         or "paste it here" in buffer.lower()):
-                    code_written = True
+                            auth_cb(url, cancel_event)
+                is_code_prompt = ("verification code" in buffer.lower()
+                                  or "authorization code" in buffer.lower()
+                                  or "paste it here" in buffer.lower())
+                tail = buffer[-60:].rstrip("\r\n")
+                is_prompt = tail.endswith("> ") or "(y/n)" in tail.lower()
+                if is_code_prompt and not code_sent:
+                    code_sent = True
                     code = code_cb() if code_cb else None
                     if code:
-                        proc.stdin.write(code.strip() + "\n")
-                        proc.stdin.flush()
+                        write_line(code)
                     else:
                         proc.terminate()
-                sys_out_chunk = buffer
-                while "\n" in sys_out_chunk:
-                    line, _, sys_out_chunk = sys_out_chunk.partition("\n")
+                elif is_prompt and not code_sent:
+                    # Answer "n" to auto-config: rclone must NOT open the
+                    # browser itself - the user opens the URL from the app
+                    # dialog (privacy: never launch a browser unasked).
+                    write_line("n" if "use auto config" in tail.lower()
+                               else "")
+                while "\n" in buffer:
+                    line, _, buffer = buffer.partition("\n")
                     LOG.info(line.rstrip("\r"))
-                buffer = sys_out_chunk
 
         reader = threading.Thread(target=read_output, daemon=True)
         reader.start()
         proc.wait()
         reader.join(timeout=10)
+        ok = proc.returncode == 0 and self.remote_usable(remote)
+        if not ok and self.remote_exists(remote):
+            try:
+                self.run(["config", "delete", remote], log_output=False)
+            except RcloneError:
+                pass
         if proc.returncode != 0:
             raise RcloneError(f"rclone config failed (code {proc.returncode})")
-        if not self.remote_exists(remote):
-            raise RcloneError("Remote not created - authentication may have failed")
+        if not ok:
+            raise RcloneError("Authentication failed - no working token "
+                              "(did you approve access in the browser?)")
         LOG.info(f"Connected: {remote} configured successfully")
         return True
 

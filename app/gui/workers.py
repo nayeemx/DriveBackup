@@ -18,9 +18,12 @@ class JobHub:
     def done(self, job, result=None, error=None):
         self.queue.put(("done", job, result, error))
 
-    def ask_auth_url(self, url):
-        self.queue.put(("auth_url", url))
+    def ask_auth_url(self, url, cancel_event=None):
+        self.queue.put(("auth_url", url, cancel_event))
         return url
+
+    def cancel_auth(self):
+        self.queue.put(("cancel_auth",))
 
     def ask_code(self):
         event = threading.Event()

@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -31,7 +32,7 @@ def _cli_connect(cfg, args):
           "that owns the Drive, approve access, then paste the code here.\n")
     manager.connect(
         remote, cfg.get("export_formats"),
-        auth_cb=lambda url: print("AUTH URL: " + url),
+        auth_cb=lambda url, ce=None: print("AUTH URL: " + url),
         code_cb=lambda: input("Authorization code: ").strip(),
     )
     print("Connected successfully.")
@@ -125,7 +126,34 @@ def _wipe_command(cfg, args, action):
     return 0
 
 
+def _acquire_single_instance():
+    """Windows named mutex: only one app instance may run.
+
+    A second launch exits immediately instead of opening a second window
+    that cannot bind the web server port (which previously showed a dead,
+    dark window where clicks did nothing).
+    """
+    if os.name != "nt":
+        return None
+    import ctypes
+    from ctypes import wintypes
+    kernel32 = ctypes.windll.kernel32
+    name = "Local\\DriveBackup_SingleInstance_{2E1B8A84-9D3F-4C2A-B5C7-3F9E2D0A6C41}"
+    handle = kernel32.CreateMutexW(None, False, name)
+    if not handle:
+        return None
+    already = kernel32.GetLastError() == 183  # ERROR_ALREADY_EXISTS
+    if already:
+        kernel32.CloseHandle(handle)
+        return None
+    return handle
+
+
+_SINGLE_INSTANCE = None
+
+
 def main():
+    global _SINGLE_INSTANCE
     set_console_callback(_print_cb)
     parser = argparse.ArgumentParser(
         prog="drivebackup", description="Google Drive backup, verify, analyze & wipe")
@@ -164,6 +192,11 @@ def main():
 
     args = parser.parse_args()
     if not args.command:
+        global _SINGLE_INSTANCE
+        _SINGLE_INSTANCE = _acquire_single_instance()
+        if _SINGLE_INSTANCE is None and os.name == "nt":
+            # Another DriveBackup is already running - it owns the port/window.
+            sys.exit(0)
         from app.gui.app import run
         run()
         return 0

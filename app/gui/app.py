@@ -162,9 +162,36 @@ def build(ctx: AppContext):
             ui.label("Settings → Updates").classes("text-[10px]") \
                 .style("color: #475569")
 
-    # --- footer console -------------------------------------------------------
+    # --- footer console (collapsible) ---------------------------------------
+    console_visible = ctx.config.get("console_visible", "1") != "0"
     with ui.footer().classes("px-2 py-1"):
+        with ui.row().classes("w-full items-center gap-2"):
+            btn = ui.button(icon="keyboard_arrow_down" if console_visible
+                            else "keyboard_arrow_up",
+                            on_click=lambda: None).props(
+                "flat dense round size=sm").classes("!ml-0")
+            ui.label("Console").classes(
+                "text-[10px] font-semibold uppercase tracking-[0.16em]") \
+                .style("color: var(--muted-fg)")
+            ui.space()
+            clear_btn = ui.button(icon="delete_sweep",
+                                  tooltip="Clear console").props(
+                "flat dense round size=sm").classes("!ml-0")
+        console_box = ui.column().classes("w-full gap-0")
         ctx.console = LogConsole()
+
+        def toggle():
+            nonlocal console_visible
+            console_visible = not console_visible
+            console_box.set_visibility(console_visible)
+            btn.props("icon=" + ("keyboard_arrow_down" if console_visible
+                                 else "keyboard_arrow_up"))
+            ctx.config.set("console_visible", "1" if console_visible else "0")
+
+        btn.on("click", toggle)
+        clear_btn.on("click", ctx.console.clear)
+        if not console_visible:
+            console_box.set_visibility(False)
 
     # --- tab content ----------------------------------------------------------
     with panels:
@@ -219,7 +246,7 @@ def _dispatch(ctx, evt):
             except Exception:
                 pass
     elif kind == "auth_url":
-        auth_url_dialog(evt[1])
+        auth_url_dialog(evt[1], on_cancel=evt[2])
     elif kind == "ask_code":
         code_dialog(evt[2], evt[1])
 
@@ -252,6 +279,29 @@ def _native_available():
         return False
 
 
+def _prewarm_webview():
+    """Load pythonnet + the webview GUI platform in the background.
+
+    In the frozen app, initializing the .NET runtime (which pywebview's
+    Windows backends need) takes many seconds; doing it in parallel with
+    server startup hides that delay so the window appears almost instantly.
+    """
+    try:
+        import clr  # noqa: F401
+        import webview.platforms.winforms  # noqa: F401
+    except Exception:
+        pass
+
+
+def _close_splash():
+    """Close the bootloader splash once the real window is showing."""
+    try:
+        import pyi_splash  # type: ignore
+        pyi_splash.close()
+    except Exception:
+        pass
+
+
 def _run_native_in_process():
     """Serve NiceGUI in-process and open pywebview in the same process.
 
@@ -260,9 +310,16 @@ def _run_native_in_process():
     that spawn silently fails, leaving the app running without a window or
     console. Here the window lives in the main process, and closing it stops
     the server and exits the app.
+
+    The window opens IMMEDIATELY with a branded "starting" screen so the user
+    never stares at a blank/dark window, and it only navigates to the app
+    once the web server actually responds (WebView2 does not retry a failed
+    initial load - it would show a dead error page forever).
     """
     global _WINDOW
     import threading
+    import time
+    import urllib.request
     import webview
     started = threading.Event()
     app.on_startup(started.set)
@@ -272,17 +329,46 @@ def _run_native_in_process():
                reload=False, show=False, uvicorn_logging_level="warning")
 
     threading.Thread(target=server, daemon=True).start()
-    if not started.wait(timeout=30):
-        print("Server did not start - opening in browser instead.")
-        ui.run(host="127.0.0.1", port=PORT, dark=True, title=APP_TITLE,
-               reload=False, show=True, uvicorn_logging_level="warning",
-               window_size=WINDOW_SIZE)
-        return
-    _WINDOW = webview.create_window(APP_TITLE, f"http://127.0.0.1:{PORT}",
+    started.wait(timeout=30)
+
+    loading_html = (
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        "<style>html,body{height:100%;margin:0;background:#0F172A;"
+        "color:#94A3B8;font-family:'Segoe UI',Arial,sans-serif;display:flex;"
+        "align-items:center;justify-content:center}"
+        ".box{text-align:center}.spin{width:34px;height:34px;margin:0 auto 14px;"
+        "border:3px solid #1E293B;border-top-color:#0D9488;border-radius:50%;"
+        "animation:s 1s linear infinite}@keyframes s{to{transform:rotate(360deg)}}"
+        "h1{font-size:15px;font-weight:600;color:#E2E8F0;margin:0 0 4px}"
+        "p{font-size:12px;margin:0}</style></head><body>"
+        "<div class='box'><div class='spin'></div>"
+        f"<h1>DriveBackup v{APP_VERSION}</h1>"
+        "<p>Starting local server &hellip;</p></div></body></html>"
+    )
+    _WINDOW = webview.create_window(APP_TITLE, html=loading_html,
                                     width=WINDOW_SIZE[0],
                                     height=WINDOW_SIZE[1],
                                     min_size=(960, 600))
     _WINDOW.events.closed += app.shutdown
+    _WINDOW.events.loaded += _close_splash
+    threading.Timer(90, _close_splash).start()
+
+    def load_when_ready():
+        url = f"http://127.0.0.1:{PORT}/"
+        for _ in range(150):
+            if _WINDOW is None:
+                return
+            try:
+                with urllib.request.urlopen(url, timeout=1):
+                    break
+            except Exception:
+                time.sleep(0.2)
+        try:
+            _WINDOW.load_url(url)
+        except Exception:
+            pass
+
+    threading.Thread(target=load_when_ready, daemon=True).start()
     webview.start()
 
 
@@ -299,6 +385,7 @@ def run():
     app.on_shutdown(lambda: (_SHUTDOWN.set(),
                              print("DriveBackup closed.")))
     threading.Thread(target=_shutdown_watchdog, daemon=True).start()
+    threading.Thread(target=_prewarm_webview, daemon=True).start()
     if _native_available():
         try:
             _run_native_in_process()
