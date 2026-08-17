@@ -6,4 +6,5 @@ __pycache__/
 *.spec
 installer.generated.iss
 gui_test_out.txt
-real_run.txt
+real_run.txtbuild-log.txt
+tools/

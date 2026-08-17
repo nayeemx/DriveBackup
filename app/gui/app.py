@@ -1,5 +1,6 @@
 import os as _os
 import queue
+import socket
 import threading
 
 from nicegui import app, ui
@@ -11,12 +12,28 @@ from ..utils.version import APP_VERSION
 from .widgets import LogConsole, code_dialog, auth_url_dialog, confirm_dialog
 from ..utils.updater import check_for_update
 
-PORT = 8085
 APP_TITLE = "DriveBackup - Google Drive backup, verify & wipe"
 WINDOW_SIZE = (1280, 860)
 _WINDOW = None
 _SHUTDOWN = threading.Event()
 _AUTO_CHECKED = False
+
+
+def pick_port(start=8085, tries=15):
+    """Return the first free port on 127.0.0.1 (or 0 = OS-assigned).
+
+    Another program (or a previous app instance) may already hold the
+    default port, so we always scan for a free one - the app must work
+    on any computer without configuration.
+    """
+    for port in range(start, start + tries):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(("127.0.0.1", port))
+                return port
+            except OSError:
+                continue
+    return 0
 
 # ---- UI UX Pro Max: Flat Design system (developer tool, dark) ---------------
 CSS = """
@@ -439,7 +456,7 @@ def _run_native():
     _kill_orphan_webviews()
     app.on_startup(_close_splash)
     threading.Timer(90, _close_splash).start()
-    ui.run(host="127.0.0.1", port=PORT, dark=True, title=APP_TITLE,
+    ui.run(host="127.0.0.1", port=pick_port(), dark=True, title=APP_TITLE,
            reload=False, show=False, uvicorn_logging_level="warning",
            native=True, window_size=WINDOW_SIZE)
 
@@ -463,6 +480,6 @@ def run():
             return
         except Exception as exc:
             print(f"Native window failed ({exc}) - opening in browser instead.")
-    ui.run(host="127.0.0.1", port=PORT, dark=True, title=APP_TITLE,
+    ui.run(host="127.0.0.1", port=pick_port(), dark=True, title=APP_TITLE,
            reload=False, show=True, uvicorn_logging_level="warning",
            window_size=WINDOW_SIZE)

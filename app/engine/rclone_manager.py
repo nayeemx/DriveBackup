@@ -3,6 +3,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import zipfile
@@ -15,6 +16,23 @@ TOOLS_DIR = APP_DIR / "tools"
 RCLONE_EXE = TOOLS_DIR / "rclone.exe"
 RCLONE_URL = "https://downloads.rclone.org/rclone-current-windows-amd64.zip"
 LOG = get_logger()
+
+
+def _bundled_binary():
+    """rclone.exe shipped inside the installer (PyInstaller onedir/_MEIPASS).
+
+    Returns a path to the bundled binary, or None if the app was not
+    installed with one (e.g. dev checkout).
+    """
+    candidates = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(Path(meipass) / "tools" / "rclone.exe")
+    candidates.append(Path(sys.executable).parent / "tools" / "rclone.exe")
+    for c in candidates:
+        if c.exists():
+            return c
+    return None
 
 
 def _no_window_kwargs() -> dict:
@@ -50,6 +68,13 @@ class RcloneManager:
 
     def ensure_binary(self, progress=None):
         if self.exe and self.exe.exists():
+            return self.exe
+        bundled = _bundled_binary()
+        if bundled:
+            TOOLS_DIR.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(str(bundled), str(RCLONE_EXE))
+            self.exe = RCLONE_EXE
+            LOG.info(f"rclone bundled with app - copied to {RCLONE_EXE}")
             return self.exe
         LOG.info("rclone not found - downloading ...")
         TOOLS_DIR.mkdir(parents=True, exist_ok=True)

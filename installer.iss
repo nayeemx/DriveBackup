@@ -21,6 +21,11 @@ WizardStyle=modern
 UninstallDisplayIcon={app}\{#MyAppExeName}
 CloseApplications=yes
 RestartApplications=no
+; DriveBackup bundles a 64-bit Python + amd64 rclone - require 64-bit Windows
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
+; Windows 10 (and 11) and newer only
+MinVersion=10.0
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -38,3 +43,50 @@ Name: "{autodesktop}\DriveBackup"; Filename: "{app}\{#MyAppExeName}"; Tasks: des
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,DriveBackup}"; Flags: nowait postinstall skipifsilent
+
+[Code]
+const
+  WEBVIEW2_GUID = 'SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
+  WEBVIEW2_GUID_32 = 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
+  WEBVIEW2_GUID_USER = 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
+
+function WebView2Installed(): Boolean;
+var
+  pv: String;
+begin
+  Result := False;
+  if RegQueryStringValue(HKLM, WEBVIEW2_GUID, 'pv', pv) then Result := True;
+  if not Result then
+    if RegQueryStringValue(HKLM, WEBVIEW2_GUID_32, 'pv', pv) then Result := True;
+  if not Result then
+    if RegQueryStringValue(HKCU, WEBVIEW2_GUID_USER, 'pv', pv) then Result := True;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  FileName: String;
+  ResultCode: Integer;
+begin
+  if CurStep <> ssPostInstall then
+    Exit;
+  if WebView2Installed() then
+    Exit;
+  // Windows 10 often has no WebView2 runtime - install it so the app window works.
+  FileName := 'MicrosoftEdgeWebview2Setup.exe';
+  try
+    DownloadTemporaryFile('https://go.microsoft.com/fwlink/p/?LinkId=2124703',
+                          FileName, '', nil);
+    Exec(ExpandConstant('{tmp}\' + FileName), '/silent /install', '',
+         SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  except
+    if WizardSilent() then begin
+      // unattended install: app still works, it opens in the default browser
+    end else begin
+      MsgBox('WebView2 runtime could not be downloaded.'#13#10#13#10 +
+             'DriveBackup will open in your default browser instead of a ' +
+             'window. You can install WebView2 later from: ' +
+             'https://developer.microsoft.com/microsoft-edge/webview2/',
+             mbInformation, MB_OK);
+    end;
+  end;
+end;

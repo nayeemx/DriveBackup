@@ -7,6 +7,7 @@ Usage:
 """
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -16,6 +17,8 @@ ROOT = Path(__file__).resolve().parent
 VERSION_FILE = ROOT / "version.txt"
 DIST = ROOT / "dist"
 GENERATED_ISS = ROOT / "installer.generated.iss"
+RCLONE_URL = "https://downloads.rclone.org/rclone-current-windows-amd64.zip"
+RCLONE_BUILD = ROOT / "tools" / "rclone.exe"
 
 INNO_URL = "https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe"
 INNO_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "Inno Setup 6"
@@ -42,7 +45,41 @@ def bump(part: str):
     print(f"Version bumped to {major}.{minor}.{patch}")
 
 
+def fetch_rclone():
+    """Locate rclone.exe and bundle it into the installer.
+
+    Prefers the copy already installed in %APPDATA%\\DriveBackup\\tools (no
+    network needed); falls back to downloading it once. The bundled copy
+    lets a fresh machine connect to Google Drive offline.
+    """
+    if RCLONE_BUILD.exists():
+        return
+    installed = (Path(os.environ.get("APPDATA", "")) / "DriveBackup"
+                 / "tools" / "rclone.exe")
+    if installed.exists():
+        RCLONE_BUILD.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(str(installed), str(RCLONE_BUILD))
+        print(f">>> rclone ready (copied from installed app): {RCLONE_BUILD}")
+        return
+    print(">>> Downloading rclone for bundling ...")
+    import zipfile
+    from app.utils.updater import download
+    dest = Path(tempfile.gettempdir()) / "rclone-current-windows-amd64.zip"
+    download(RCLONE_URL, dest, progress=lambda m: print("   ", m))
+    if dest.read_bytes()[:2] != b"PK":
+        raise SystemExit("rclone download is not a valid zip "
+                         "- download https://rclone.org/downloads/ manually.")
+    with zipfile.ZipFile(dest) as zf:
+        entry = next(n for n in zf.namelist() if n.endswith("/rclone.exe"))
+        RCLONE_BUILD.parent.mkdir(parents=True, exist_ok=True)
+        with zf.open(entry) as src, open(RCLONE_BUILD, "wb") as out:
+            out.write(src.read())
+    dest.unlink(missing_ok=True)
+    print(f">>> rclone ready: {RCLONE_BUILD}")
+
+
 def build_package():
+    fetch_rclone()
     cmd = [
         sys.executable, "-m", "PyInstaller",
         "--noconfirm", "--clean", "--onedir", "--windowed",
@@ -50,6 +87,7 @@ def build_package():
         "--collect-all", "nicegui",
         "--collect-all", "pywebview",
         "--add-data", f"version.txt;.",
+        "--add-data", f"{RCLONE_BUILD};tools",
         "--splash", "assets/splash.png",
         "main.py",
     ]
