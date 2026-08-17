@@ -6,15 +6,17 @@ from nicegui import app, ui
 
 from .context import AppContext
 from .pages import (AnalyzePage, BackupPage, DashboardPage, SettingsPage,
-                    VerifyPage, WipePage)
+                    VerifyPage, WipePage, apply_update)
 from ..utils.version import APP_VERSION
-from .widgets import LogConsole, code_dialog, auth_url_dialog
+from .widgets import LogConsole, code_dialog, auth_url_dialog, confirm_dialog
+from ..utils.updater import check_for_update
 
 PORT = 8085
 APP_TITLE = "DriveBackup - Google Drive backup, verify & wipe"
 WINDOW_SIZE = (1280, 860)
 _WINDOW = None
 _SHUTDOWN = threading.Event()
+_AUTO_CHECKED = False
 
 # ---- UI UX Pro Max: Flat Design system (developer tool, dark) ---------------
 CSS = """
@@ -174,9 +176,9 @@ def build(ctx: AppContext):
                 "text-[10px] font-semibold uppercase tracking-[0.16em]") \
                 .style("color: var(--muted-fg)")
             ui.space()
-            clear_btn = ui.button(icon="delete_sweep",
-                                  tooltip="Clear console").props(
-                "flat dense round size=sm").classes("!ml-0")
+            clear_btn = ui.button(icon="delete_sweep").props(
+                "flat dense round size=sm").classes("!ml-0") \
+                .tooltip("Clear console")
         console_box = ui.column().classes("w-full gap-0")
         ctx.console = LogConsole()
 
@@ -255,9 +257,59 @@ def _dispatch(ctx, evt):
 def _page():
     ctx = AppContext()
     build(ctx)
+    ui.timer(3.0, lambda: _auto_update_check(ctx), once=True)
     auto = _os.environ.get("DRIVEBACKUP_AUTOCLOSE")
     if auto:
         ui.timer(float(auto), _close_window)
+
+
+def _auto_update_check(ctx):
+    """Check GitHub for a newer release a few seconds after startup.
+
+    Mode (Settings -> Updates -> Automatic updates):
+      prompt (default): ask before downloading/installing
+      silent:           download, install and relaunch without asking
+      off:              never check automatically
+    """
+    global _AUTO_CHECKED
+    if _AUTO_CHECKED:
+        return
+    _AUTO_CHECKED = True
+    mode = (ctx.config.get("auto_update", "prompt") or "prompt").strip()
+    if mode == "off":
+        return
+    owner = (ctx.config.get("github_owner", "") or "").strip()
+    repo = (ctx.config.get("github_repo", "") or "").strip()
+    if not owner or not repo:
+        return
+
+    def fn(hub):
+        hub.log("INFO", f"Checking GitHub for updates ({owner}/{repo}) ...")
+        info, err = check_for_update(owner, repo)
+        if err:
+            hub.log("INFO", f"Auto update check skipped: {err}")
+            return None
+        return info
+
+    def on_done(result, error):
+        if error or result is None:
+            return
+        info = result
+        if mode == "silent":
+            apply_update(ctx, info)
+            return
+        ctx.hub.log("INFO",
+                    f"Update available: v{info.version} "
+                    f"(you have v{APP_VERSION}).")
+        confirm_dialog(
+            "Update available",
+            f"DriveBackup v{info.version} is available (you have "
+            f"v{APP_VERSION}). Download and install now?",
+            ok_label="Update now",
+            on_ok=lambda: apply_update(ctx, info),
+        )
+
+    ctx.start_job("auto-update", fn, on_done=on_done)
 
 
 def _close_window():
@@ -279,20 +331,6 @@ def _native_available():
         return False
 
 
-def _prewarm_webview():
-    """Load pythonnet + the webview GUI platform in the background.
-
-    In the frozen app, initializing the .NET runtime (which pywebview's
-    Windows backends need) takes many seconds; doing it in parallel with
-    server startup hides that delay so the window appears almost instantly.
-    """
-    try:
-        import clr  # noqa: F401
-        import webview.platforms.winforms  # noqa: F401
-    except Exception:
-        pass
-
-
 def _close_splash():
     """Close the bootloader splash once the real window is showing."""
     try:
@@ -302,74 +340,98 @@ def _close_splash():
         pass
 
 
-def _run_native_in_process():
-    """Serve NiceGUI in-process and open pywebview in the same process.
+def _kill_orphan_webviews():
+    """Kill WebView2 browser processes orphaned by dead app instances.
 
-    This deliberately avoids nicegui's native mode, which spawns a window
-    subprocess via multiprocessing. In a frozen (PyInstaller --windowed) app
-    that spawn silently fails, leaving the app running without a window or
-    console. Here the window lives in the main process, and closing it stops
-    the server and exits the app.
-
-    The window opens IMMEDIATELY with a branded "starting" screen so the user
-    never stares at a blank/dark window, and it only navigates to the app
-    once the web server actually responds (WebView2 does not retry a failed
-    initial load - it would show a dead error page forever).
+    If DriveBackup is terminated uncleanly (crash, force-kill, power loss),
+    its WebView2 browser process tree survives and keeps the WebView2
+    user-data-folder lock. The NEXT launch then stalls for tens of seconds
+    waiting for that lock - the classic 'stuck on loading screen' symptom.
+    Only processes whose parent is no longer alive are killed, so other
+    applications' WebView2 processes (Teams, Office, ...) are never touched.
     """
-    global _WINDOW
-    import threading
-    import time
-    import urllib.request
-    import webview
-    started = threading.Event()
-    app.on_startup(started.set)
+    import ctypes
+    from ctypes import wintypes
+    try:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        TH32CS_SNAPPROCESS = 0x00000002
+        MAX_PATH = 260
 
-    def server():
-        ui.run(host="127.0.0.1", port=PORT, dark=True, title=APP_TITLE,
-               reload=False, show=False, uvicorn_logging_level="warning")
+        class PROCESSENTRY32(ctypes.Structure):
+            _fields_ = [
+                ("dwSize", wintypes.DWORD),
+                ("cntUsage", wintypes.DWORD),
+                ("th32ProcessID", wintypes.DWORD),
+                ("th32DefaultHeapID", ctypes.c_void_p),
+                ("th32ModuleID", wintypes.DWORD),
+                ("cntThreads", wintypes.DWORD),
+                ("th32ParentProcessID", wintypes.DWORD),
+                ("pcPriClassBase", ctypes.c_long),
+                ("dwFlags", wintypes.DWORD),
+                ("szExeFile", ctypes.c_char * MAX_PATH),
+            ]
 
-    threading.Thread(target=server, daemon=True).start()
-    started.wait(timeout=30)
-
-    loading_html = (
-        "<!doctype html><html><head><meta charset='utf-8'>"
-        "<style>html,body{height:100%;margin:0;background:#0F172A;"
-        "color:#94A3B8;font-family:'Segoe UI',Arial,sans-serif;display:flex;"
-        "align-items:center;justify-content:center}"
-        ".box{text-align:center}.spin{width:34px;height:34px;margin:0 auto 14px;"
-        "border:3px solid #1E293B;border-top-color:#0D9488;border-radius:50%;"
-        "animation:s 1s linear infinite}@keyframes s{to{transform:rotate(360deg)}}"
-        "h1{font-size:15px;font-weight:600;color:#E2E8F0;margin:0 0 4px}"
-        "p{font-size:12px;margin:0}</style></head><body>"
-        "<div class='box'><div class='spin'></div>"
-        f"<h1>DriveBackup v{APP_VERSION}</h1>"
-        "<p>Starting local server &hellip;</p></div></body></html>"
-    )
-    _WINDOW = webview.create_window(APP_TITLE, html=loading_html,
-                                    width=WINDOW_SIZE[0],
-                                    height=WINDOW_SIZE[1],
-                                    min_size=(960, 600))
-    _WINDOW.events.closed += app.shutdown
-    _WINDOW.events.loaded += _close_splash
-    threading.Timer(90, _close_splash).start()
-
-    def load_when_ready():
-        url = f"http://127.0.0.1:{PORT}/"
-        for _ in range(150):
-            if _WINDOW is None:
-                return
-            try:
-                with urllib.request.urlopen(url, timeout=1):
-                    break
-            except Exception:
-                time.sleep(0.2)
+        snap = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+        if snap in (-1, ctypes.c_void_p(-1).value):
+            return
+        procs = []
+        alive = set()
         try:
-            _WINDOW.load_url(url)
-        except Exception:
-            pass
+            entry = PROCESSENTRY32()
+            entry.dwSize = ctypes.sizeof(PROCESSENTRY32)
+            ok = kernel32.Process32FirstW(snap, ctypes.byref(entry))
+            while ok:
+                alive.add(entry.th32ProcessID)
+                procs.append((entry.th32ProcessID,
+                              entry.th32ParentProcessID,
+                              entry.szExeFile.decode("utf-8", "ignore")))
+                ok = kernel32.Process32NextW(snap, ctypes.byref(entry))
+        finally:
+            kernel32.CloseHandle(snap)
 
-    threading.Thread(target=load_when_ready, daemon=True).start()
-    webview.start()
+        PROCESS_TERMINATE = 0x0001
+        kills = []
+        for _ in range(8):
+            found = False
+            for pid, ppid, name in procs:
+                if (name.lower() == "msedgewebview2.exe"
+                        and ppid not in alive and pid not in kills):
+                    kills.append(pid)
+                    found = True
+            if not found:
+                break
+        for pid in kills:
+            try:
+                h = kernel32.OpenProcess(PROCESS_TERMINATE, False, pid)
+                if h:
+                    kernel32.TerminateProcess(h, 1)
+                    kernel32.CloseHandle(h)
+                    alive.discard(pid)
+            except Exception:
+                pass
+        if kills:
+            pass
+    except Exception:
+        pass
+
+
+def _run_native():
+    """Run the server and the window in SEPARATE processes.
+
+    Root cause of the 40-60 s startup stall: WebView2's initialization and
+    message pumping run on the .NET side of pythonnet and pin the GIL for
+    tens of seconds, starving uvicorn's event loop in the same process
+    (requests complete on the handler side but responses are never sent).
+    NiceGUI's native mode runs the window in a multiprocessing spawn child,
+    so the web server keeps its own event loop and responds immediately.
+    The bootloader splash (pyi_splash) covers the window child's startup.
+    """
+    _kill_orphan_webviews()
+    app.on_startup(_close_splash)
+    threading.Timer(90, _close_splash).start()
+    ui.run(host="127.0.0.1", port=PORT, dark=True, title=APP_TITLE,
+           reload=False, show=False, uvicorn_logging_level="warning",
+           native=True, window_size=WINDOW_SIZE)
 
 
 def _shutdown_watchdog():
@@ -385,10 +447,9 @@ def run():
     app.on_shutdown(lambda: (_SHUTDOWN.set(),
                              print("DriveBackup closed.")))
     threading.Thread(target=_shutdown_watchdog, daemon=True).start()
-    threading.Thread(target=_prewarm_webview, daemon=True).start()
     if _native_available():
         try:
-            _run_native_in_process()
+            _run_native()
             return
         except Exception as exc:
             print(f"Native window failed ({exc}) - opening in browser instead.")

@@ -1,56 +1,61 @@
-# DriveBackup — AI Google Drive Backup & Wipe
+# DriveBackup — Google Drive Backup, Verify & Wipe
 
-Backs up your entire Google Drive to a location you choose, **verifies every file
-byte-for-byte**, then — only after a successful verification — moves your Drive
-files to Trash and empties it. AI analysis finds duplicates, junk, and suggests
-an organization plan. Works without a credit card or Google Cloud project.
+A Windows desktop app that backs up your entire Google Drive to a location you
+choose, **verifies every file byte-for-byte**, and — only after a successful
+verification — moves your Drive files to Trash and empties it. AI analysis
+finds duplicates, junk, and suggests an organization plan. Works without a
+credit card or a Google Cloud project.
+
+## Install (recommended: installer from GitHub)
+
+Download the latest `DriveBackup-Setup-<version>.exe` from the
+[releases page](https://github.com/nayeemx/DriveBackup/releases) and run it.
+The app installs per-user (no admin needed) and updates itself in place from
+Settings -> Updates.
+
+- Installed to `%LOCALAPPDATA%\DriveBackup\`
+- Config, tokens and rclone live in `%APPDATA%\DriveBackup\`
+- No credit card, no Google Cloud project, no background services
 
 ## How it works (safety-first)
 
 ```
-1. Connect   Google sign-in via your browser (rclone's public client, no Google Cloud needed)
+1. Connect   Google sign-in via your browser (rclone's public client)
 2. Backup    every file/folder copied to your chosen destination
 3. Verify    every file checked (size + MD5; Google Docs/Sheets/Slides exported & confirmed)
-4. Analyze   (optional) AI report: duplicates, junk files, org plan (free Gemini key optional)
+4. Analyze   (optional) AI report: duplicates, junk files, org plan (BYOK)
 5. Wipe      ONLY after a fresh successful verification:
              - must type "DELETE ALL" and tick the checkbox
              - step 1: all Drive files -> Trash (recoverable)
              - step 2: empty Trash (permanent)
 ```
 
-Safety gates: **Wipe is blocked** unless a successful verification ran within the
-last 24 hours (configurable) *and* you type the exact confirmation phrase.
+Safety gates: **Wipe is blocked** unless a successful verification ran within
+the last 24 hours (configurable) *and* you type the exact confirmation phrase.
 Only Google Drive is touched — not Gmail, Photos, or anything else.
 
-## Install
+## Updates
 
-Windows, Python 3.10+ (tested on 3.14).
+- Settings -> Updates -> **Check for updates** (manual), or set
+  **Automatic updates** to `prompt` (ask first, default), `silent`, or `off`.
+- On startup the app checks the GitHub releases page a few seconds after the
+  window opens.
+- The update downloads the new installer to `%TEMP%`, runs it silently, and
+  relaunches the app — your config and Google connection are preserved.
 
-```powershell
-cd D:\projects\code\DriveBackup
-py -3.14 -m venv .venv
-.\.venv\Scripts\python -m pip install -r requirements.txt
-```
+## AI analysis (optional, BYOK)
 
-## Run
+Works with **OpenRouter** (any model, one key) or **Google Gemini**:
 
-```powershell
-.\.venv\Scripts\python main.py          # desktop app
-```
+1. OpenRouter: get a free key at https://openrouter.ai/keys (small usage credit)
+2. Settings tab -> paste key, choose provider, enable AI analysis
+3. Analysis includes: duplicates, junk files, category overview, and a
+   suggested organization plan
 
-The app opens a **native desktop window** (web-based UI, no browser needed).
-If a native window isn't available it falls back to your default browser at
-`http://127.0.0.1:8085`. The app downloads rclone (~30 MB) on first use, with
-automatic retries.
+Without a key the app still works — analysis and reports are generated
+locally.
 
-### Optional: free AI summary (Gemini)
-
-1. Get a free API key: https://aistudio.google.com/apikey (no card needed)
-2. Settings tab -> paste key, enable AI analysis
-
-Without a key the app still works — analysis/reports are generated locally.
-
-## Workflow in the app
+## Using the app
 
 | Section | What it does |
 |---|---|
@@ -59,43 +64,47 @@ Without a key the app still works — analysis/reports are generated locally.
 | Verify | Byte-level check of backup vs Drive (size+MD5, optional deep download check) |
 | Analyze | Duplicates/junk/top files table + AI report + organization plan |
 | Wipe | Danger zone — safety gates required, 2-step trash flow |
-| Settings | Destination, threads, verify freshness window, Gemini key |
+| Settings | Destination, threads, verify freshness window, AI key, updates |
 
 The header shows current job status; the bottom console streams every engine
-step with color-coded levels (info/warning/error/success). Notifications pop
-up for completions and failures.
+step with color-coded levels. Notifications pop up for completions and
+failures.
 
-## CLI (power users)
+## Development
+
+Windows, Python 3.10+ (tested on 3.14).
 
 ```powershell
-.\.venv\Scripts\python main.py connect          # browser auth
-.\.venv\Scripts\python main.py inventory        # list what's in Drive
-.\.venv\Scripts\python main.py backup --dir <folder>
-.\.venv\Scripts\python main.py verify           # verify backup
-.\.venv\Scripts\python main.py deepcheck        # verify + download check
-.\.venv\Scripts\python main.py analyze          # duplicates/junk/org plan
-.\.venv\Scripts\python main.py report           # generate markdown report
-.\.venv\Scripts\python main.py trash --phrase "DELETE ALL" --yes
-.\.venv\Scripts\python main.py emptytrash       # permanently empty trash
+py -3.14 -m venv .venv
+.\.venv\Scripts\python -m pip install -r requirements.txt
+.\.venv\Scripts\python main.py          # desktop app
 ```
 
-## Where things live
+Build the installer (PyInstaller + Inno Setup):
 
-- App config / auth tokens / rclone: `%APPDATA%\DriveBackup\`
-- Backups: the destination you chose (default `%USERPROFILE%\DriveBackup_Drive`)
-- Reports: `%APPDATA%\DriveBackup\reports\`
+```powershell
+.\.venv\Scripts\python build.py --bump patch
+```
 
-## Tests
+Tests:
 
 ```powershell
 .\.venv\Scripts\python smoke_test.py    # end-to-end pipeline on a fake local drive
+.\.venv\Scripts\python ai_test.py       # AI analysis on sample data
 .\.venv\Scripts\python wipe_test.py     # deep check + wipe execution
 ```
+
+## Known issues & fixes
+
+Every problem found so far, its root cause, the fix, and how it was verified
+is tracked in [PROBLEMS.md](PROBLEMS.md).
 
 ## Notes
 
 - Google Docs/Sheets/Slides cannot be downloaded as-is; they are exported
-  (docx/xlsx/pptx) and verified by presence + size. All other files are MD5-checked.
+  (docx/xlsx/pptx) and verified by presence + size. All other files are
+  MD5-checked.
 - Verification result expires (default 24 h) — re-verify before wiping, on purpose.
-- UI stack: NiceGUI (Quasar/Material design) rendered in a native pywebview window.
-- This is not affiliated with Google. rclone is used under its MIT license.
+- UI stack: NiceGUI (Quasar/Material) served by uvicorn, rendered in a native
+  window (separate window process, so a busy WebView2 can never stall the app).
+- Not affiliated with Google. rclone is used under its MIT license.

@@ -19,6 +19,7 @@ DEFAULTS = {
     "theme": "dark",
     "github_owner": "",
     "github_repo": "",
+    "auto_update": "prompt",
 }
 
 STATE_DIR.mkdir(parents=True, exist_ok=True)

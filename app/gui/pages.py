@@ -1,5 +1,4 @@
 from contextlib import nullcontext
-import tempfile
 from pathlib import Path
 
 from nicegui import ui
@@ -15,13 +14,34 @@ from ..engine import backup as bk
 from ..engine import verify as vf
 from ..engine import wipe as wp
 from ..utils.config import format_bytes, state_path
-from ..utils.updater import (UpdateError, check_for_update, download,
-                             install_silently, launch_installed)
+from ..utils.updater import check_for_update, install_update
 from ..utils.version import APP_VERSION
 
 
 def _fmt(n):
     return f"{n:,}" if isinstance(n, int) else str(n)
+
+
+def apply_update(ctx, info):
+    """Download, install and relaunch an update in a background job."""
+
+    def fn(hub):
+        hub.log("INFO", f"Downloading {info.asset_name} ...")
+        install_update(info, progress=lambda m: hub.log("INFO", m))
+        hub.log("SUCCESS", f"DriveBackup v{info.version} installed.")
+        return True
+
+    def on_done(result, error):
+        if error:
+            ui.notify(f"Update failed: {error}", type="negative",
+                      position="top-right")
+            return
+        ui.notify("Update installed - restarting ...", type="positive",
+                  position="top-right")
+        from nicegui import app as napp
+        napp.shutdown()
+
+    ctx.start_job("update", fn, on_done=on_done)
 
 
 class DashboardPage:
@@ -762,6 +782,17 @@ class SettingsPage:
                         "GitHub repository name",
                         value=self.ctx.config.get("github_repo", ""))\
                         .props("outlined dense").classes("flex-1")
+                self.auto_update = ui.select(
+                    {"prompt": "Ask me on startup (recommended)",
+                     "silent": "Install automatically without asking",
+                     "off": "Only when I click 'Check for updates'"},
+                    value=self.ctx.config.get("auto_update", "prompt"),
+                    label="Automatic updates").props("outlined dense")\
+                    .classes("mt-2 w-full")
+                ui.label("On startup the app checks GitHub and, if a newer "
+                         "release exists, updates from GitHub directly - no "
+                         "manual installs needed.").classes("text-xs") \
+                    .style(f"color:{MUTED}").classes("mt-1")
                 self.check_btn = ui.button("Check for updates", icon="update",
                                            on_click=self._run_update_check)\
                     .props("color=primary no-caps").classes("mt-2")
@@ -828,41 +859,8 @@ class SettingsPage:
             f"DriveBackup v{info.version} is available (you have "
             f"v{APP_VERSION}). Download and install now?",
             ok_label="Update now",
-            on_ok=lambda: self._download_update(info),
+            on_ok=lambda: apply_update(self.ctx, info),
         )
-
-    def _download_update(self, info):
-        dest = Path(tempfile.gettempdir()) / info.asset_name
-        self.check_btn.disable()
-
-        def fn(hub):
-            hub.log("INFO", f"Downloading {info.asset_name} ...")
-            download(info.asset_url, dest,
-                     progress=lambda m: hub.log("INFO", m))
-            hub.log("INFO", "Installing update ...")
-            rc = install_silently(dest)
-            if rc != 0:
-                raise UpdateError(f"Installer failed (exit code {rc}).")
-            hub.log("SUCCESS", f"DriveBackup v{info.version} installed.")
-            return True
-
-        self.ctx.start_job("update", fn,
-                           on_done=lambda r, e: self._after_install(r, e))
-
-    def _after_install(self, result, error):
-        self.check_btn.enable()
-        if error:
-            ui.notify(f"Update failed: {error}", type="negative",
-                      position="top-right")
-            return
-        ui.notify("Update installed - restarting ...", type="positive",
-                  position="top-right")
-        try:
-            launch_installed()
-        except Exception as exc:  # noqa: BLE001
-            ui.notify(str(exc), type="negative", position="top-right")
-        from nicegui import app as napp
-        napp.shutdown()
 
     def _save(self):
         cfg = self.ctx.config
@@ -878,5 +876,7 @@ class SettingsPage:
         cfg.set("ai_provider",
                 (self.provider.value or "gemini").strip())
         cfg.set("ai_model", (self.model.value or "").strip())
+        cfg.set("auto_update",
+                (self.auto_update.value or "prompt").strip())
         self.ctx.hub.log("SUCCESS", "Settings saved.")
         ui.notify("Settings saved", type="positive", position="top-right")

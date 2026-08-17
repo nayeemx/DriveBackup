@@ -1,6 +1,7 @@
 import os
 import re
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -139,3 +140,17 @@ def check_for_update(owner: str, repo: str):
         return fetch_latest(owner, repo), None
     except UpdateError as exc:
         return None, str(exc)
+
+
+def install_update(info: ReleaseInfo, progress=None):
+    """Download, install and relaunch an update (raises UpdateError).
+
+    Downloads the setup exe to %TEMP%, runs it silently (in-place upgrade,
+    keeps %APPDATA% settings), then launches the freshly installed app.
+    """
+    dest = Path(tempfile.gettempdir()) / info.asset_name
+    download(info.asset_url, dest, progress=progress)
+    rc = install_silently(dest)
+    if rc != 0:
+        raise UpdateError(f"Installer failed (exit code {rc}).")
+    launch_installed()
