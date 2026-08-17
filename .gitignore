@@ -1,0 +1,9 @@
+.venv/
+build/
+dist/
+__pycache__/
+*.pyc
+*.spec
+installer.generated.iss
+gui_test_out.txt
+real_run.txt
