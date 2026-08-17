@@ -22,3 +22,42 @@ async def test_all_tabs_render(create_user):
     await user.should_see("Help & Guide")
     await user.should_see("Everything in my Google Drive")
     await user.should_see("What Verify does")
+
+
+async def test_file_picker_dialog_opens(create_user):
+    import json
+    import tempfile
+    from pathlib import Path
+
+    import app.engine.backup as bk
+
+    tmp = Path(tempfile.mkdtemp(prefix="db_ux_"))
+    inv_path = bk.state_path("inventory.json")
+    inv_path.parent.mkdir(parents=True, exist_ok=True)
+    inv_path.write_text(json.dumps([
+        {"Path": "docs/report.txt", "Name": "report.txt", "Size": 2400},
+        {"Path": "photos/img1.jpg", "Name": "img1.jpg", "Size": 8192},
+        {"Path": "photos/img2.png", "Name": "img2.png", "Size": 2048},
+    ]), encoding="utf-8")
+
+    from app.gui.app import build
+    from app.gui.context import AppContext
+
+    @ui.page("/")
+    def page():
+        ctx = AppContext()
+        build(ctx)
+
+    user: User = create_user()
+    await user.open("/")
+    user.find("Backup").click()
+    await user.should_see("Everything in my Google Drive")
+    user.find("Only these files (pick them one by one)").click()
+    await user.should_see("Browse & select files")
+    user.find("Browse & select files").click()
+    await user.should_see("Select files to back up")
+    await user.should_see("0 of 3 files selected")
+    user.find("Wipe").click()
+    await user.should_see("Select files to wipe")
+    user.find("Select files to wipe").click()
+    await user.should_see("Shift-click selects a range")

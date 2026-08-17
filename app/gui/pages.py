@@ -4,8 +4,9 @@ from pathlib import Path
 from nicegui import ui
 
 from .widgets import (ACCENT, DANGER, GOOD, INFO, MUTED, PRIMARY, WARN,
-                      LogConsole, PipelineChips, StatCard, confirm_dialog,
-                      info_card, open_in_explorer, page_header, pick_directory)
+                      FilePickerDialog, LogConsole, PipelineChips, StatCard,
+                      confirm_dialog, info_card, open_in_explorer, page_header,
+                      pick_directory)
 
 from ..ai import analyzer as ai_analyzer
 from ..ai import llm
@@ -50,6 +51,7 @@ class DashboardPage:
         self.navigate = navigate
         self.stats = {}
         self.connect_btn = None
+        self.disconnect_btn = None
 
     def build(self, parent=None):
         with parent or nullcontext():
@@ -62,6 +64,9 @@ class DashboardPage:
                 self.connect_btn = ui.button("Connect Google Drive", icon="link",
                                              on_click=self._connect)\
                     .props("color=primary no-caps")
+                self.disconnect_btn = ui.button("Disconnect account", icon="link_off",
+                                                on_click=self._disconnect)\
+                    .props("outline no-caps color=negative").set_visibility(False)
                 ui.button("Refresh", icon="refresh", on_click=self.refresh)\
                     .props("outline no-caps")
 
@@ -99,9 +104,13 @@ class DashboardPage:
             if self.connect_btn:
                 self.connect_btn.enable()
                 self.connect_btn.set_text("Connect Google Drive")
+            if self.disconnect_btn:
+                self.disconnect_btn.set_visibility(False)
             ctx.hub.log("WARNING", "Drive not connected - click 'Connect Google Drive'.")
             return
         self.stats["state"].set("Connected", GOOD)
+        if self.disconnect_btn:
+            self.disconnect_btn.set_visibility(True)
         job = ctx.jobs.get("stats")
         if job and job["running"]:
             return
@@ -166,6 +175,48 @@ class DashboardPage:
         ui.notify("Google Drive connected", type="positive", position="top-right")
         self.refresh()
 
+    def _disconnect(self):
+        confirm_dialog(
+            "Disconnect Google Drive?",
+            "This removes the connected Google account from the app.\n\n"
+            "The local backup stays untouched. The next 'Connect' will ask "
+            "you to sign in again - you can pick a different account then.",
+            ok_label="Yes, disconnect", danger=True,
+            on_ok=self._disconnect_start,
+        )
+
+    def _disconnect_start(self):
+        ctx = self.ctx
+        remote = ctx.config.get("remote")
+        if self.disconnect_btn:
+            self.disconnect_btn.disable()
+        ctx.start_job(
+            "disconnect",
+            lambda hub: ctx.manager.disconnect(
+                remote, line_cb=lambda m: hub.log("WARNING", m)),
+            on_done=self._disconnect_done,
+        )
+
+    def _disconnect_done(self, result, error):
+        ctx = self.ctx
+        ctx.finish_job("disconnect")
+        if error:
+            if self.disconnect_btn:
+                self.disconnect_btn.enable()
+            ui.notify(f"Disconnect failed: {error}", type="negative",
+                      position="top-right")
+            return
+        inv_path = bk.state_path("inventory.json")
+        try:
+            inv_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        ctx.hub.log("SUCCESS", "Google Drive disconnected. Sign in again to "
+                               "connect a different account.")
+        ui.notify("Google Drive disconnected", type="positive",
+                  position="top-right")
+        self.refresh()
+
 
 class BackupPage:
     def __init__(self, ctx):
@@ -179,7 +230,10 @@ class BackupPage:
         self.scope_radio = None
         self.folders_input = None
         self.skip_input = None
+        self.files_input = None
+        self.pick_files = []
         self.scope_summary = None
+        self.refresh_btn = None
 
     def build(self, parent=None):
         with parent or nullcontext():
@@ -215,6 +269,7 @@ class BackupPage:
                     "all": "Everything in my Google Drive",
                     "only": "Only these folders",
                     "skip": "Everything except folders I list",
+                    "files": "Only these files (pick them one by one)",
                 }, value="all", on_change=self._scope_changed)\
                     .props("dense").classes("mt-2")
                 self.folders_input = ui.textarea(
@@ -231,8 +286,23 @@ class BackupPage:
                     .props("outlined dense autogrow").classes(
                     "w-full max-w-xl mt-2").bind_visibility_from(
                     self.scope_radio, "value", value="skip")
+                with ui.row().classes("w-full items-center gap-2 mt-2") \
+                        .bind_visibility_from(self.scope_radio, "value",
+                                              value="files"):
+                    ui.button("Browse & select files", icon="checklist",
+                              on_click=self._open_picker).props(
+                        "outline no-caps")
+                    self.files_input = ui.label("No files selected yet") \
+                        .classes("text-sm").style(f"color:{MUTED}")
                 self.scope_summary = ui.label("").classes("text-sm mt-2") \
                     .style(f"color:{INFO}")
+                with ui.row().classes("items-center gap-2 mt-1"):
+                    ui.button("Refresh Drive listing", icon="sync",
+                              on_click=self._refresh_listing) \
+                        .props("flat dense no-caps").classes("text-xs")
+                    ui.label("The file list comes from your Drive - refresh "
+                             "after uploading new files.").classes("text-xs") \
+                        .style(f"color:{MUTED}")
 
             self.start_btn = ui.button("Start Backup", icon="download",
                                        on_click=self._run).props(
@@ -246,6 +316,70 @@ class BackupPage:
             self._scope_changed()
 
     def _scope_changed(self):
+        self._update_scope_summary()
+
+    def _open_picker(self):
+        inv = bk.load_inventory()
+        if not inv:
+            ui.notify("No Drive listing yet - click 'Refresh Drive listing' "
+                      "first (it takes a few seconds).",
+                      type="warning", position="top-right")
+            return
+        self.picker = FilePickerDialog(
+            "Select files to back up",
+            "Click files to select them; shift-click selects a range. "
+            "Search filters the list.")
+        self.picker.open(inv, on_confirm=self._files_picked)
+
+    def _files_picked(self, paths):
+        self.pick_files = paths
+        if paths:
+            total = sum(f.get("Size", 0) for f in bk.load_inventory()
+                        if (f.get("Path") or f.get("Name")) in set(paths))
+            self.files_input.set_text(
+                f"{_fmt(len(paths))} files selected ({format_bytes(total)})")
+        else:
+            self.files_input.set_text("No files selected yet")
+        self._update_scope_summary()
+
+    def _refresh_listing(self):
+        ctx = self.ctx
+        remote = ctx.config.get("remote")
+        if not ctx.manager.remote_exists(remote):
+            ui.notify("Connect Google Drive first (Dashboard).", type="warning")
+            return
+        self.refresh_btn.disable()
+        ctx.start_job(
+            "refresh-listing",
+            lambda hub: ctx.manager.lsjson(remote),
+            on_done=self._listing_done,
+        )
+
+    def _listing_done(self, result, error):
+        self.ctx.finish_job("refresh-listing")
+        self.refresh_btn.enable()
+        if error:
+            ui.notify(f"Refresh failed: {error}", type="negative")
+            return
+        import json as _json
+        bk.state_path("inventory.json").write_text(
+            _json.dumps(result, indent=1), encoding="utf-8")
+        self.ctx.hub.log("SUCCESS",
+                         f"Drive listing refreshed: {len(result)} files")
+        ui.notify(f"Listing refreshed: {_fmt(len(result))} files",
+                  type="positive", position="top-right")
+        if self.pick_files:
+            wanted = set(self.pick_files)
+            missing = [p for p in self.pick_files
+                       if p not in {(f.get("Path") or f.get("Name"))
+                                    for f in result}]
+            if missing:
+                self.pick_files = [p for p in self.pick_files
+                                   if p not in set(missing)]
+                self.files_input.set_text(
+                    f"{_fmt(len(self.pick_files))} files selected - "
+                    f"{_fmt(len(missing))} are no longer on Drive and were "
+                    "dropped")
         self._update_scope_summary()
 
     def _folder_lines(self, widget):
@@ -271,7 +405,14 @@ class BackupPage:
             from ..engine.backup import _match_folders
             only = self._folder_lines(self.folders_input)
             skip = self._folder_lines(self.skip_input)
-            if scope == "only" and only:
+            if scope == "files":
+                picked = set(self.pick_files)
+                files = [f for f in inv
+                         if (f.get("Path") or f.get("Name")) in picked]
+                label = (f"{_fmt(len(files))} selected files, "
+                         f"{format_bytes(sum(f.get('Size', 0) for f in files))}"
+                         if files else "No files selected yet")
+            elif scope == "only" and only:
                 files = [f for f in inv
                          if _match_folders(f.get("Path") or f.get("Name"), only)]
                 label = f"Only the selected folders - {len(files)} files, " \
@@ -308,11 +449,15 @@ class BackupPage:
         scope = self.scope_radio.value
         only = self._folder_lines(self.folders_input) if scope == "only" else []
         skip = self._folder_lines(self.skip_input) if scope == "skip" else []
+        files = self.pick_files if scope == "files" else []
         if scope == "only" and not only:
             ui.notify("List at least one folder to back up.", type="warning")
             return
         if scope == "skip" and not skip:
             ui.notify("List at least one folder to skip.", type="warning")
+            return
+        if scope == "files" and not files:
+            ui.notify("Select at least one file to back up.", type="warning")
             return
         cfg = self.ctx.config
         self.running = True
@@ -329,6 +474,7 @@ class BackupPage:
                 progress_cb=lambda p, t: hub.progress(p, t),
                 include_folders=only or None,
                 exclude_folders=skip or None,
+                include_files=files or None,
             ),
             on_progress=self._on_progress,
             on_done=self._on_done,
@@ -755,6 +901,8 @@ class WipePage:
         self.purge_btn = None
         self.inv_table = None
         self.inv_summary = None
+        self.wipe_files = []
+        self.wipe_scope_label = None
 
     def build(self, parent=None):
         with parent or nullcontext():
@@ -766,19 +914,23 @@ class WipePage:
             info_card(
                 "delete_forever",
                 "What Wipe deletes",
-                ["Every file in YOUR Google Drive that you backed up "
-                 "(the scope you chose on the Backup page).",
+                ["By default EVERYTHING on your Google Drive that you backed "
+                 "up. You can also select individual files below.",
                  "Only Google Drive is affected - Gmail, Contacts and Photos "
                  "are NOT touched.",
                  "Files others shared with you are only removed from your "
                  "view, not deleted.",
-                 "Wipe is a safety-gated 2-step flow: 1) everything moves to "
-                 "the Trash (recoverable), 2) you empty the Trash (permanent)."],
+                 "Wipe is a safety-gated 2-step flow: 1) files move to the "
+                 "Trash (recoverable), 2) you empty the Trash (permanent)."],
                 tone="danger")
-            with ui.row().classes("w-full items-center gap-2 mt-2"):
+            with ui.row().classes("w-full items-center gap-2 mt-2 flex-wrap"):
                 ui.button("Preview Drive contents", icon="list",
                           on_click=self._show_inventory).props(
                     "outline no-caps")
+                ui.button("Select files to wipe", icon="checklist",
+                          on_click=self._pick_files).props("outline no-caps")
+            self.wipe_scope_label = ui.label("") \
+                .classes("text-xs mt-1").style(f"color:{INFO}")
             self.inv_summary = ui.label("").classes("text-xs mt-1") \
                 .style(f"color:{MUTED}")
             self.inv_table = ui.table(
@@ -824,6 +976,8 @@ class WipePage:
                     "color=negative no-caps")
             self._update_gate()
             self.ctx.after_verify.append(self._update_gate)
+            self.wipe_scope_label.set_text(
+                "Wipe scope: ALL files on your Google Drive (default).")
 
     def _show_inventory(self):
         inv = bk.load_inventory()
@@ -839,10 +993,46 @@ class WipePage:
         self.inv_table.update_rows(rows)
         self.inv_table.set_visibility(True)
         total = sum(f.get("Size", 0) for f in inv)
-        self.inv_summary.set_text(
-            f"{_fmt(len(inv))} files, {format_bytes(total)} - these are the "
-            "files 'Move to Trash' will delete from your Drive.")
+        if self.wipe_files:
+            picked = set(self.wipe_files)
+            total = sum(f.get("Size", 0) for f in inv
+                        if (f.get("Path") or f.get("Name")) in picked)
+            self.inv_summary.set_text(
+                f"{_fmt(len(self.wipe_files))} files selected "
+                f"({format_bytes(total)}) - 'Move to Trash' will only touch "
+                "these.")
+        else:
+            self.inv_summary.set_text(
+                f"{_fmt(len(inv))} files, {format_bytes(total)} - these are the "
+                "files 'Move to Trash' will delete from your Drive.")
         ui.notify(f"{len(rows)} files in scope", type="info", position="top-right")
+
+    def _pick_files(self):
+        inv = bk.load_inventory()
+        if not inv:
+            ui.notify("No Drive listing yet - run a Backup first "
+                      "(the listing is captured during Backup).",
+                      type="warning", position="top-right")
+            return
+        self.picker = FilePickerDialog(
+            "Select files to wipe",
+            "Only these files will be deleted (still goes through Trash and "
+            "the safety gates). Shift-click selects a range.")
+        self.picker.open(inv, on_confirm=self._files_picked)
+
+    def _files_picked(self, paths):
+        self.wipe_files = paths
+        if paths:
+            inv = bk.load_inventory()
+            picked = set(paths)
+            total = sum(f.get("Size", 0) for f in inv
+                        if (f.get("Path") or f.get("Name")) in picked)
+            self.wipe_scope_label.set_text(
+                f"Wipe scope: {_fmt(len(paths))} selected files "
+                f"({format_bytes(total)}) - only these will be deleted.")
+        else:
+            self.wipe_scope_label.set_text(
+                "Wipe scope: ALL files on your Google Drive (default).")
 
     def _update_gate(self):
         ok, msg = vf.verify_fresh(hours=self.ctx.config.get("verify_freshness_hours", 24))
@@ -886,15 +1076,17 @@ class WipePage:
         except wp.SafetyGateError as exc:
             ui.notify(str(exc), type="negative", position="top-right")
             return
+        n = len(self.wipe_files)
+        scope = f"{n} selected files" if n else "ALL files on your Drive"
         labels = {
             "trash": ("Move to Trash",
-                      "This moves ALL files on your Google Drive into the Trash. "
+                      f"This moves {scope} into the Trash. "
                       "They stay recoverable there."),
             "emptytrash": ("Empty Trash",
                            "This PERMANENTLY deletes everything in your Drive "
                            "Trash. Files cannot be recovered afterwards."),
             "purge": ("Permanent delete",
-                      "ADVANCED: permanently deletes ALL files WITHOUT sending "
+                      f"ADVANCED: permanently deletes {scope} WITHOUT sending "
                       "them to Trash. There is NO recovery."),
         }
         title, message = labels[action]
@@ -911,9 +1103,11 @@ class WipePage:
             "purge": wp.purge_forever,
         }
         fn = jobs[action]
+        files = self.wipe_files or None
         self.ctx.start_job(
             action,
-            lambda hub: fn(remote, line_cb=lambda m: hub.log("WARNING", m)),
+            lambda hub: fn(remote, line_cb=lambda m: hub.log("WARNING", m),
+                           files=files),
             on_done=self._done(action),
         )
 

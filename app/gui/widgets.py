@@ -2,6 +2,8 @@ import html as _html
 
 from nicegui import ui
 
+from ..utils.config import format_bytes
+
 # ---- design tokens (UI UX Pro Max: Flat Design / developer tool) ------------
 PRIMARY = "#0D9488"
 PRIMARY_HOVER = "#14B8A6"
@@ -228,6 +230,138 @@ def confirm_dialog(title, message, ok_label="Continue", danger=False,
             ui.button(ok_label, on_click=ok).props(f"color={color} no-caps")
     dlg.open()
     return dlg
+
+
+class FilePickerDialog:
+    """Browse the Drive listing and select individual files.
+
+    Searchable + sortable table, native multi-select (shift-click selects a
+    range). Returns the chosen relative paths via on_confirm. Call
+    update_inventory() to refresh rows (e.g. after a fresh lsjson).
+    """
+
+    def __init__(self, title="Select files", subtitle=None):
+        self.title = title
+        self.subtitle = subtitle
+        self.dialog = None
+        self.table = None
+        self.search = None
+        self.count_label = None
+        self._rows = []
+        self._inventory = []
+        self.on_confirm = None
+
+    def _build(self):
+        self.dialog = ui.dialog()
+        with self.dialog, ui.card().classes("w-[52rem] max-w-[94vw] h-[70vh] "
+                                            "flex flex-col p-4"):
+            with ui.row().classes("w-full items-center gap-2"):
+                ui.icon("folder_open").classes("text-xl").style(f"color:{PRIMARY}")
+                ui.label(self.title).classes("text-base font-semibold")
+            if self.subtitle:
+                ui.label(self.subtitle).classes("text-xs") \
+                    .style(f"color:{MUTED}")
+            with ui.row().classes("w-full items-center gap-2 mt-2"):
+                self.search = ui.input("Search file names",
+                                       placeholder="type to filter ...",
+                                       on_change=self._apply_filter) \
+                    .props("outlined dense clearable").classes("flex-1")
+                ui.button("Select all", icon="checklist", on_click=self._all)\
+                    .props("flat dense no-caps")
+                ui.button("Clear", icon="clear_all", on_click=self._clear)\
+                    .props("flat dense no-caps")
+            self.table = ui.table(
+                columns=[
+                    {"name": "path", "label": "File / folder path",
+                     "field": "path", "sortable": True},
+                    {"name": "size", "label": "Size", "field": "size",
+                     "sortable": True},
+                ],
+                rows=self._rows,
+                row_key="path",
+                selection="multiple",
+                on_select=self._on_select,
+            ).props('flat bordered dense').classes("w-full flex-1")
+            with ui.row().classes("w-full items-center justify-between mt-2"):
+                self.count_label = ui.label("0 of 0 files selected") \
+                    .classes("text-xs").style(f"color:{MUTED}")
+                with ui.row().classes("items-center gap-2"):
+                    ui.button("Cancel", on_click=self._cancel).props("flat")
+                    ui.button("Use selected files", icon="check",
+                              on_click=self._confirm)\
+                        .props("color=primary no-caps")
+
+    def _apply_filter(self):
+        q = (self.search.value or "").strip().lower()
+        if q:
+            rows = [r for r in self._rows if q in r["path"].lower()]
+        else:
+            rows = list(self._rows)
+        self.table.update_rows(rows)
+        self._sync_count()
+
+    def _all(self):
+        self.table.selected = list(self.table.rows)
+        self._sync_count()
+
+    def _clear(self):
+        self.table.selected = []
+        self._sync_count()
+
+    def _on_select(self, event):
+        self._sync_count()
+
+    def _sync_count(self):
+        n = len(self.table.selected)
+        total = sum(r.get("_size", 0) for r in self.table.selected)
+        self.count_label.set_text(
+            f"{n} of {len(self._inventory)} files selected"
+            + (f"  ({_human_size(total)})" if total else ""))
+
+    def _confirm(self):
+        paths = [r["path"] for r in self.table.selected]
+        self.dialog.close()
+        if self.on_confirm:
+            self.on_confirm(paths)
+
+    def _cancel(self):
+        self.dialog.close()
+
+    def open(self, inventory, on_confirm):
+        """Show the picker for the given inventory list (lsjson items)."""
+        if self.dialog is None:
+            self._build()
+        self._inventory = inventory
+        self._rows = [{"path": f.get("Path") or f.get("Name"),
+                       "size": format_bytes(f.get("Size", 0)),
+                       "_size": f.get("Size", 0)} for f in inventory]
+        self.table.update_rows(self._rows)
+        self.table.selected = []
+        if self.search:
+            self.search.value = ""
+        self.on_confirm = on_confirm
+        self._sync_count()
+        self.dialog.open()
+
+    def update_inventory(self, inventory):
+        """Refresh the table in place (keeps selection if paths still exist)."""
+        if self.dialog is None:
+            return
+        kept = {r["path"] for r in self.table.selected}
+        self.open(inventory, self.on_confirm)
+        self.table.selected = [r for r in self.table.rows
+                               if r["path"] in kept]
+        self._sync_count()
+
+
+def _human_size(n):
+    if n < 1024:
+        return f"{n} B"
+    for unit in ("KB", "MB", "GB", "TB"):
+        n /= 1024.0
+        if n < 1024:
+            return f"{n:.1f} {unit}"
+    return f"{n:.1f} PB"
 
 
 def auth_url_dialog(url, on_cancel=None):

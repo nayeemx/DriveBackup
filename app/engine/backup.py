@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import re
+import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -126,14 +127,21 @@ def _match_folders(path: str, prefixes):
     return False
 
 
-def _scope_filters(include_folders=None, exclude_folders=None):
-    """rclone filter args that restrict a copy to the chosen folders.
+def _scope_filters(include_folders=None, exclude_folders=None,
+                   include_files=None, tmp_list_path=None):
+    """rclone filter args that restrict a copy to the chosen scope.
 
     include-mode: --include "/<folder>/**" for each folder + --exclude "*"
     (only these folders). exclude-mode: --exclude "/<folder>/**" for each
-    folder (everything else).
+    folder (everything else). file-mode: --files-from-raw with the exact
+    file list (no globbing).
     """
     args = []
+    if include_files:
+        if not tmp_list_path:
+            raise ValueError("include_files needs a temp list file")
+        args += ["--files-from-raw", tmp_list_path]
+        return args
     includes = [f.strip("/") for f in (include_folders or []) if f.strip()]
     excludes = [f.strip("/") for f in (exclude_folders or []) if f.strip()]
     for folder in includes:
@@ -145,9 +153,18 @@ def _scope_filters(include_folders=None, exclude_folders=None):
     return args
 
 
+def _write_files_list(files, tmp_dir):
+    """Write relative paths (one per line) to a temp file for --files-from-raw."""
+    fd, path = tempfile.mkstemp(suffix=".txt", dir=str(tmp_dir))
+    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+        for p in files:
+            fh.write(str(p).replace("\\", "/") + "\n")
+    return path
+
+
 def backup(remote: str, local_dir, transfers=4, checkers=8,
            line_cb=LOG.info, progress_cb=None, root="",
-           include_folders=None, exclude_folders=None):
+           include_folders=None, exclude_folders=None, include_files=None):
     local_dir = Path(local_dir)
     local_dir.mkdir(parents=True, exist_ok=True)
     if any(local_dir.iterdir()):
@@ -166,7 +183,19 @@ def backup(remote: str, local_dir, transfers=4, checkers=8,
 
     includes = [f.strip("/") for f in (include_folders or []) if f.strip()]
     excludes = [f.strip("/") for f in (exclude_folders or []) if f.strip()]
-    if includes or excludes:
+    files_only = [str(f).replace("\\", "/").strip("/")
+                  for f in (include_files or []) if str(f).strip()]
+    if files_only:
+        wanted = set(files_only)
+        before = len(inventory)
+        inventory = [f for f in inventory
+                     if (f.get("Path") or f.get("Name")) in wanted]
+        LOG.info(f"File scope kept {len(inventory)} of {before} files")
+        if not inventory:
+            raise RcloneError(
+                "No files match your selection. The Drive listing may be "
+                "outdated - refresh it and try again.")
+    elif includes or excludes:
         def in_scope(item):
             path = item.get("Path") or item.get("Name") or ""
             if includes and not _match_folders(path, includes):
@@ -203,9 +232,19 @@ def backup(remote: str, local_dir, transfers=4, checkers=8,
                 pass
         line_cb(line)
 
-    filters = _scope_filters(includes, excludes)
-    manager.copy(remote, local_dir, transfers, checkers, on_line, root=root,
-                 extra_args=filters)
+    tmp_list = None
+    try:
+        if files_only:
+            tmp_list = _write_files_list(files_only, local_dir.parent)
+        filters = _scope_filters(includes, excludes, files_only, tmp_list)
+        manager.copy(remote, local_dir, transfers, checkers, on_line, root=root,
+                     extra_args=filters)
+    finally:
+        if tmp_list:
+            try:
+                os.unlink(tmp_list)
+            except OSError:
+                pass
 
     if progress_cb:
         progress_cb(0.95, "Computing local checksums ...")

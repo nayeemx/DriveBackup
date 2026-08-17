@@ -3,6 +3,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import threading
 import zipfile
 from pathlib import Path
@@ -178,6 +179,23 @@ class RcloneManager:
             return bool(out) and "total" in out.lower()
         except RcloneError:
             return False
+
+    def disconnect(self, remote, line_cb=LOG.info):
+        """Revoke the token and remove the remote from rclone's config.
+
+        The account is fully disconnected: the stored token is deleted, so
+        the next Connect starts a fresh OAuth sign-in (pick another account).
+        """
+        if not self.remote_exists(remote):
+            line_cb(f"{remote}: nothing to disconnect")
+            return True
+        try:
+            self.run(["config", "disconnect", f"{remote}:"], capture=True,
+                     log_output=False)
+        except RcloneError:
+            pass
+        self.run(["config", "delete", remote], capture=True, log_output=False)
+        return True
 
     def connect(self, remote, export_formats, auth_cb, code_cb):
         if self.remote_exists(remote) and self.remote_usable(remote):
@@ -370,6 +388,38 @@ class RcloneManager:
         if use_trash and self.backend_type(remote) == "drive":
             args.append("--drive-use-trash")
         return self.stream(args, line_cb)
+
+    def delete_files(self, remote, files, use_trash, line_cb, root=""):
+        """Delete exactly the listed files (relative paths, one per line).
+
+        Uses rclone's --files-from-raw so paths are taken literally -
+        no globbing, no accidental matches.
+        """
+        if not files:
+            return True
+        tmp = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                    "w", suffix=".txt", delete=False,
+                    encoding="utf-8", newline="\n") as fh:
+                for p in files:
+                    fh.write(str(p).replace("\\", "/") + "\n")
+                tmp = fh.name
+            args = [
+                "delete", f"{remote}:{root}",
+                "--files-from-raw", tmp,
+                "--fast-list",
+                "-v",
+            ]
+            if use_trash and self.backend_type(remote) == "drive":
+                args.append("--drive-use-trash")
+            return self.stream(args, line_cb)
+        finally:
+            if tmp:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
 
     def empty_trash(self, remote, line_cb):
         if self.backend_type(remote) != "drive":

@@ -73,7 +73,31 @@ content = generate_report(result, vres, analysis, plan)
 path = save_report(content)
 print("  report:", path, f"({len(content)} chars)")
 
-print("\n== 7. wipe safety gates ==")
+print("\n== 7. selective backup + delete (files-from) ==")
+SELECTIVE_DST = TEST_DIR / "dst_selective"
+files_subset = ["docs/report.txt", "photos/img1.jpg"]
+res_sel = bk.backup("localtest", SELECTIVE_DST, root=str(SRC),
+                    include_files=files_subset, line_cb=lambda m: None)
+print("  selective backup:", res_sel["files"], "files,", res_sel["bytes"], "bytes")
+assert res_sel["files"] == 2, "only the 2 selected files should be backed up"
+assert (SELECTIVE_DST / "docs" / "report.txt").exists()
+assert (SELECTIVE_DST / "photos" / "img1.jpg").exists()
+assert not (SELECTIVE_DST / "docs" / "same_a.bin").exists(), \
+    "unselected files must not be copied"
+print("  selective copy OK (files-from-raw)")
+
+TRASH_DST = TEST_DIR / "dst_trash"
+bk.backup("localtest", TRASH_DST, root=str(SRC), line_cb=lambda m: None)
+wp.move_to_trash("localtest", root=str(SRC), files=files_subset,
+                 line_cb=lambda m: None)
+left = manager.lsjson("localtest", root=str(SRC))
+left_paths = {(f.get("Path") or f.get("Name")) for f in left}
+assert "docs/report.txt" not in left_paths, "selected file should be gone"
+assert "docs/same_a.bin" in left_paths, "unselected file must remain"
+assert "Thumbs.db" in left_paths, "unselected file must remain"
+print("  selective delete OK (files-from-raw),", len(left), "files remain")
+
+print("\n== 8. wipe safety gates ==")
 cfg = Config()
 cfg.set("verify_freshness_hours", 24)
 try:
@@ -92,8 +116,13 @@ except wp.SafetyGateError:
 wp.require_confirmation("DELETE ALL")
 print("  phrase gate accepted 'DELETE ALL'")
 
-print("\n== 8. org plan ==")
+print("\n== 9. org plan ==")
 for entry in plan[:4]:
     print("  ", entry["source"], "->", entry["target"])
+
+print("\n== 10. disconnect ==")
+manager.disconnect("localtest", line_cb=lambda m: print("   ", m))
+assert not manager.remote_exists("localtest"), "remote should be removed"
+print("  disconnect OK - remote + token removed from config")
 
 print("\nALL PIPELINE TESTS PASSED")
