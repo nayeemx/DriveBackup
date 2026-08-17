@@ -234,6 +234,8 @@ class BackupPage:
         self.pick_files = []
         self.scope_summary = None
         self.refresh_btn = None
+        self._listing_cb = None
+        self.picker = None
 
     def build(self, parent=None):
         with parent or nullcontext():
@@ -297,8 +299,9 @@ class BackupPage:
                 self.scope_summary = ui.label("").classes("text-sm mt-2") \
                     .style(f"color:{INFO}")
                 with ui.row().classes("items-center gap-2 mt-1"):
-                    ui.button("Refresh Drive listing", icon="sync",
-                              on_click=self._refresh_listing) \
+                    self.refresh_btn = ui.button("Refresh Drive listing",
+                                                 icon="sync",
+                                                 on_click=self._refresh_listing) \
                         .props("flat dense no-caps").classes("text-xs")
                     ui.label("The file list comes from your Drive - refresh "
                              "after uploading new files.").classes("text-xs") \
@@ -320,52 +323,63 @@ class BackupPage:
 
     def _open_picker(self):
         inv = bk.load_inventory()
-        if not inv:
-            ui.notify("No Drive listing yet - click 'Refresh Drive listing' "
-                      "first (it takes a few seconds).",
-                      type="warning", position="top-right")
+        if self.picker is None:
+            self.picker = FilePickerDialog(
+                "Select files to back up",
+                "Browsing your connected Google Drive account. Click files "
+                "to select them; shift-click selects a range; search "
+                "filters the list.",
+                on_refresh=self._picker_refresh)
+        if inv:
+            self.picker.open(inv, on_confirm=self._files_picked)
             return
-        self.picker = FilePickerDialog(
-            "Select files to back up",
-            "Click files to select them; shift-click selects a range. "
-            "Search filters the list.")
-        self.picker.open(inv, on_confirm=self._files_picked)
+        ui.notify("Fetching your Drive listing ...", type="info",
+                  position="top-right")
+        self._start_listing(self._open_picker_with)
 
-    def _files_picked(self, paths):
-        self.pick_files = paths
-        if paths:
-            total = sum(f.get("Size", 0) for f in bk.load_inventory()
-                        if (f.get("Path") or f.get("Name")) in set(paths))
-            self.files_input.set_text(
-                f"{_fmt(len(paths))} files selected ({format_bytes(total)})")
-        else:
-            self.files_input.set_text("No files selected yet")
-        self._update_scope_summary()
+    def _open_picker_with(self, result, error):
+        if error or not result:
+            return
+        self.picker.open(result, on_confirm=self._files_picked)
 
-    def _refresh_listing(self):
+    def _picker_refresh(self, picker):
+        self._start_listing(
+            lambda result, error: picker.refresh_done(error, result))
+
+    def _start_listing(self, cb):
         ctx = self.ctx
         remote = ctx.config.get("remote")
         if not ctx.manager.remote_exists(remote):
-            ui.notify("Connect Google Drive first (Dashboard).", type="warning")
+            ui.notify("Connect Google Drive first (Dashboard).",
+                      type="warning")
+            cb(None, "Drive is not connected.")
             return
-        self.refresh_btn.disable()
+        self._listing_cb = cb
+        if self.refresh_btn:
+            self.refresh_btn.disable()
         ctx.start_job(
-            "refresh-listing",
+            "listing-backup",
             lambda hub: ctx.manager.lsjson(remote),
             on_done=self._listing_done,
         )
 
     def _listing_done(self, result, error):
-        self.ctx.finish_job("refresh-listing")
-        self.refresh_btn.enable()
+        ctx = self.ctx
+        ctx.finish_job("listing-backup")
+        if self.refresh_btn:
+            self.refresh_btn.enable()
+        cb, self._listing_cb = self._listing_cb, None
         if error:
-            ui.notify(f"Refresh failed: {error}", type="negative")
+            ui.notify(f"Could not read your Drive: {error}", type="negative",
+                      position="top-right")
+            if cb:
+                cb(None, error)
             return
         import json as _json
         bk.state_path("inventory.json").write_text(
             _json.dumps(result, indent=1), encoding="utf-8")
-        self.ctx.hub.log("SUCCESS",
-                         f"Drive listing refreshed: {len(result)} files")
+        ctx.hub.log("SUCCESS",
+                    f"Drive listing refreshed: {len(result)} files")
         ui.notify(f"Listing refreshed: {_fmt(len(result))} files",
                   type="positive", position="top-right")
         if self.pick_files:
@@ -381,6 +395,22 @@ class BackupPage:
                     f"{_fmt(len(missing))} are no longer on Drive and were "
                     "dropped")
         self._update_scope_summary()
+        if cb:
+            cb(result, None)
+
+    def _files_picked(self, paths):
+        self.pick_files = paths
+        if paths:
+            total = sum(f.get("Size", 0) for f in bk.load_inventory()
+                        if (f.get("Path") or f.get("Name")) in set(paths))
+            self.files_input.set_text(
+                f"{_fmt(len(paths))} files selected ({format_bytes(total)})")
+        else:
+            self.files_input.set_text("No files selected yet")
+        self._update_scope_summary()
+
+    def _refresh_listing(self):
+        self._start_listing(None)
 
     def _folder_lines(self, widget):
         return [ln.strip("/ ").strip() for ln in (widget.value or "").splitlines()
@@ -903,6 +933,8 @@ class WipePage:
         self.inv_summary = None
         self.wipe_files = []
         self.wipe_scope_label = None
+        self.picker = None
+        self._listing_cb = None
 
     def build(self, parent=None):
         with parent or nullcontext():
@@ -1009,16 +1041,61 @@ class WipePage:
 
     def _pick_files(self):
         inv = bk.load_inventory()
-        if not inv:
-            ui.notify("No Drive listing yet - run a Backup first "
-                      "(the listing is captured during Backup).",
-                      type="warning", position="top-right")
+        if self.picker is None:
+            self.picker = FilePickerDialog(
+                "Select files to wipe",
+                "Browsing your connected Google Drive account. Only these "
+                "files will be deleted (still goes through Trash and the "
+                "safety gates). Shift-click selects a range.",
+                on_refresh=self._picker_refresh)
+        if inv:
+            self.picker.open(inv, on_confirm=self._files_picked)
             return
-        self.picker = FilePickerDialog(
-            "Select files to wipe",
-            "Only these files will be deleted (still goes through Trash and "
-            "the safety gates). Shift-click selects a range.")
-        self.picker.open(inv, on_confirm=self._files_picked)
+        ui.notify("Fetching your Drive listing ...", type="info",
+                  position="top-right")
+        self._start_listing(self._open_picker_with)
+
+    def _open_picker_with(self, result, error):
+        if error or not result:
+            return
+        self.picker.open(result, on_confirm=self._files_picked)
+
+    def _picker_refresh(self, picker):
+        self._start_listing(
+            lambda result, error: picker.refresh_done(error, result))
+
+    def _start_listing(self, cb):
+        ctx = self.ctx
+        remote = ctx.config.get("remote")
+        if not ctx.manager.remote_exists(remote):
+            ui.notify("Connect Google Drive first (Dashboard).",
+                      type="warning")
+            cb(None, "Drive is not connected.")
+            return
+        self._listing_cb = cb
+        ctx.start_job(
+            "listing-wipe",
+            lambda hub: ctx.manager.lsjson(remote),
+            on_done=self._listing_done,
+        )
+
+    def _listing_done(self, result, error):
+        ctx = self.ctx
+        ctx.finish_job("listing-wipe")
+        cb, self._listing_cb = self._listing_cb, None
+        if error:
+            ui.notify(f"Could not read your Drive: {error}", type="negative",
+                      position="top-right")
+            if cb:
+                cb(None, error)
+            return
+        import json as _json
+        bk.state_path("inventory.json").write_text(
+            _json.dumps(result, indent=1), encoding="utf-8")
+        ctx.hub.log("SUCCESS",
+                    f"Drive listing refreshed: {len(result)} files")
+        if cb:
+            cb(result, None)
 
     def _files_picked(self, paths):
         self.wipe_files = paths

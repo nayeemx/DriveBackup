@@ -1,4 +1,31 @@
-"""Headless UI smoke: every tab must build and render (no windows spawned)."""
+"""Headless UI smoke: every tab must build and render (no windows spawned).
+
+APPDATA is redirected to a temp dir BEFORE importing app modules so the
+tests never touch the real app state / rclone config.
+"""
+import os
+import shutil
+import tempfile
+from pathlib import Path
+
+_TMP = Path(tempfile.gettempdir()) / "db_ux_appdata"
+_TMP.mkdir(parents=True, exist_ok=True)
+_real_appdata = os.environ.get("APPDATA", "")
+os.environ["APPDATA"] = str(_TMP / "AppData")
+
+_real_rclone = None
+for _cand in (Path(os.environ.get("LOCALAPPDATA", "")) / "DriveBackup",
+              Path(_real_appdata) / "DriveBackup"):
+    _p = _cand / "tools" / "rclone.exe"
+    if _p.exists():
+        _real_rclone = _p
+        break
+if _real_rclone:
+    tools = Path(os.environ["APPDATA"]) / "DriveBackup" / "tools"
+    tools.mkdir(parents=True, exist_ok=True)
+    if not (tools / "rclone.exe").exists():
+        shutil.copy2(_real_rclone, tools / "rclone.exe")
+
 from nicegui import ui
 from nicegui.testing import User
 
@@ -26,12 +53,9 @@ async def test_all_tabs_render(create_user):
 
 async def test_file_picker_dialog_opens(create_user):
     import json
-    import tempfile
-    from pathlib import Path
 
     import app.engine.backup as bk
 
-    tmp = Path(tempfile.mkdtemp(prefix="db_ux_"))
     inv_path = bk.state_path("inventory.json")
     inv_path.parent.mkdir(parents=True, exist_ok=True)
     inv_path.write_text(json.dumps([

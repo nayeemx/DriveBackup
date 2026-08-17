@@ -240,12 +240,14 @@ class FilePickerDialog:
     update_inventory() to refresh rows (e.g. after a fresh lsjson).
     """
 
-    def __init__(self, title="Select files", subtitle=None):
+    def __init__(self, title="Select files", subtitle=None, on_refresh=None):
         self.title = title
         self.subtitle = subtitle
+        self.on_refresh = on_refresh
         self.dialog = None
         self.table = None
         self.search = None
+        self.refresh_btn = None
         self.count_label = None
         self._rows = []
         self._inventory = []
@@ -266,6 +268,11 @@ class FilePickerDialog:
                                        placeholder="type to filter ...",
                                        on_change=self._apply_filter) \
                     .props("outlined dense clearable").classes("flex-1")
+                if self.on_refresh:
+                    self.refresh_btn = ui.button("Refresh list from Drive",
+                                                 icon="sync",
+                                                 on_click=self._refresh)\
+                        .props("flat dense no-caps")
                 ui.button("Select all", icon="checklist", on_click=self._all)\
                     .props("flat dense no-caps")
                 ui.button("Clear", icon="clear_all", on_click=self._clear)\
@@ -299,6 +306,27 @@ class FilePickerDialog:
             rows = list(self._rows)
         self.table.update_rows(rows)
         self._sync_count()
+
+    def _refresh(self):
+        if not self.on_refresh:
+            return
+        if self.refresh_btn:
+            self.refresh_btn.disable()
+        if self.count_label:
+            self.count_label.set_text("Refreshing from Drive ...")
+        self.on_refresh(self)
+
+    def refresh_done(self, error=None, inventory=None):
+        """Called by the page after the Drive listing job finished."""
+        if self.refresh_btn:
+            self.refresh_btn.enable()
+        if error:
+            if self.count_label:
+                self.count_label.set_text(
+                    f"{len(self._rows)} rows loaded - refresh failed: {error}")
+            return
+        if inventory is not None:
+            self.update_inventory(inventory)
 
     def _all(self):
         self.table.selected = list(self.table.rows)
