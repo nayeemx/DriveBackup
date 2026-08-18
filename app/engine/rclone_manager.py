@@ -222,7 +222,7 @@ class RcloneManager:
         self.run(["config", "delete", remote], capture=True, log_output=False)
         return True
 
-    def connect(self, remote, export_formats, auth_cb, code_cb):
+    def connect(self, remote, backend_type, export_formats, auth_cb, code_cb):
         if self.remote_exists(remote) and self.remote_usable(remote):
             return True
         if self.remote_exists(remote):
@@ -233,11 +233,14 @@ class RcloneManager:
                 pass
             LOG.info("No remote configured - starting OAuth connection ...")
         args = [
-            "config", "create", remote, "drive",
+            "config", "create", remote, backend_type,
             "config_is_local=true",
-            f"drive_export_formats={export_formats}",
             "--non-interactive=false",
         ]
+        if backend_type == "drive":
+            args.append(f"drive_export_formats={export_formats}")
+        elif backend_type == "google photos":
+            args.append("read_only=false")
         proc = subprocess.Popen(
             [str(self.exe), "--config", str(self._token_path)] + args,
             stdin=subprocess.PIPE,

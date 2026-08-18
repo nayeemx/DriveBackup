@@ -4,21 +4,21 @@ from nicegui import ui
 
 from ..utils.config import format_bytes
 
-# ---- design tokens (UI UX Pro Max: Flat Design / developer tool) ------------
-PRIMARY = "#0D9488"
-PRIMARY_HOVER = "#14B8A6"
-ACCENT = "#EA580C"
-DANGER = "#DC2626"
-GOOD = "#22C55E"
-WARN = "#F59E0B"
-INFO = "#38BDF8"
-MUTED = "#94A3B8"
+# ---- design tokens (Premium Glassmorphism Design System) ------------
+PRIMARY = "var(--primary)"
+PRIMARY_HOVER = "var(--primary-hover)"
+ACCENT = "var(--accent)"
+DANGER = "var(--danger)"
+GOOD = "var(--good)"
+WARN = "var(--warn)"
+INFO = "var(--info)"
+MUTED = "var(--muted)"
 
 LEVEL_COLORS = {
     "INFO": INFO,
-    "DEBUG": "#64748B",
+    "DEBUG": "var(--muted)",
     "WARNING": WARN,
-    "ERROR": "#F87171",
+    "ERROR": DANGER,
     "SUCCESS": GOOD,
 }
 
@@ -30,10 +30,11 @@ def page_header(icon, title, subtitle=None):
     with ui.row().classes("w-full items-start gap-3 mb-4"):
         with ui.element("div").classes(
                 "w-10 h-10 rounded-lg flex items-center justify-center shrink-0") \
-                .style(f"background:rgba(13,148,136,0.12); color:{PRIMARY}"):
+                .style(f"background:var(--glow-primary); color:{PRIMARY}; box-shadow: 0 0 15px var(--glow-primary);"):
             ui.icon(icon).classes("text-xl")
         with ui.column().classes("gap-0.5 flex-1"):
-            ui.label(title).classes("text-xl font-semibold tracking-tight")
+            ui.label(title).classes("text-xl font-semibold tracking-tight")\
+                .style(f"color: {PRIMARY};")
             if subtitle:
                 ui.label(subtitle).classes("text-sm").style(
                     f"color:{MUTED}")
@@ -44,7 +45,7 @@ def info_card(icon, title, lines, tone="info"):
     accent = {"info": INFO, "good": GOOD, "warn": WARN, "danger": DANGER}\
         .get(tone, INFO)
     with ui.card().props("flat bordered").classes("w-full p-3").style(
-            f"border-color:{accent}55"):
+            f"border-color:var(--border); background:var(--input-bg);"):
         with ui.row().classes("w-full items-center gap-2"):
             ui.icon(icon).classes("text-lg").style(f"color:{accent}")
             ui.label(title).classes("text-sm font-semibold")
@@ -108,12 +109,12 @@ class StatCard:
     def __init__(self, label, value="-", icon="info", color=ACCENT):
         self.icon = icon
         self.color = color
-        with ui.card().props("flat bordered").classes("w-full p-3"):
+        with ui.card().props("flat bordered").classes("w-full p-3 hover-lift"):
             with ui.row().classes("items-center gap-3 w-full"):
                 with ui.element("div").classes(
                         "w-9 h-9 rounded-lg flex items-center justify-center "
-                        "shrink-0").style(f"background:rgba({_rgb(color)});"
-                                          f"color:{color}"):
+                        "shrink-0").style(f"background:var(--input-bg);"
+                                          f"color:{color}; box-shadow: 0 0 10px var(--shadow-color)"):
                     ui.icon(icon).classes("text-lg")
                 with ui.column().classes("gap-0 flex-1 min-w-0"):
                     self.label_el = ui.label(label).classes(
@@ -128,10 +129,8 @@ class StatCard:
             self.value_el.style(f"color: {color}")
 
 
-def _rgb(hex_color):
-    h = hex_color.lstrip("#")
-    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-    return f"{r},{g},{b},0.12"
+def _rgb(hex_color, alpha="0.12"):
+    pass
 
 
 def chip(text, color="grey", icon=None):
@@ -171,7 +170,7 @@ class PipelineChips:
             self.states[step] = state
 
     def refresh(self):
-        connected = self.ctx.manager.remote_exists(self.ctx.config.get("remote"))
+        connected = self.ctx.manager.remote_exists(self.ctx.config.active_remote)
         verify_ok = self._verify_ok()
         for step in PIPELINE_STEPS:
             state = "pending"
@@ -457,18 +456,18 @@ def auth_url_dialog(url, on_cancel=None):
             with ui.row().classes("items-start gap-2"):
                 ui.label("1").classes("w-5 h-5 rounded-full text-center "
                                        "text-[11px] font-bold shrink-0") \
-                    .style(f"background:rgba(13,148,136,.15);color:{PRIMARY}")
+                    .style(f"background:rgba({_rgb(PRIMARY, '0.15')});color:{PRIMARY}")
                 ui.label("Click 'Open in browser' below.").classes("text-sm")
             with ui.row().classes("items-start gap-2"):
                 ui.label("2").classes("w-5 h-5 rounded-full text-center "
                                        "text-[11px] font-bold shrink-0") \
-                    .style(f"background:rgba(13,148,136,.15);color:{PRIMARY}")
+                    .style(f"background:rgba({_rgb(PRIMARY, '0.15')});color:{PRIMARY}")
                 ui.label("Sign in with the Google account that owns the "
                          "Drive and approve access.").classes("text-sm")
             with ui.row().classes("items-start gap-2"):
                 ui.label("3").classes("w-5 h-5 rounded-full text-center "
                                        "text-[11px] font-bold shrink-0") \
-                    .style(f"background:rgba(13,148,136,.15);color:{PRIMARY}")
+                    .style(f"background:rgba({_rgb(PRIMARY, '0.15')});color:{PRIMARY}")
                 ui.label("Come back here - it connects automatically.")\
                     .classes("text-sm")
         with ui.row().classes("w-full items-center gap-2 mt-3"):

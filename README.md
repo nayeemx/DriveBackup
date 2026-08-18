@@ -1,4 +1,4 @@
-# DriveBackup — Google Drive Backup, Verify & Wipe
+# DriveBackup — Google Drive & Photos Backup, Verify & Wipe
 
 A Windows desktop app that backs up your entire Google Drive to a location you
 choose, **verifies every file byte-for-byte**, and — only after a successful
@@ -32,7 +32,14 @@ Settings -> Updates.
 
 Safety gates: **Wipe is blocked** unless a successful verification ran within
 the last 24 hours (configurable) *and* you type the exact confirmation phrase.
-Only Google Drive is touched — not Gmail, Photos, or anything else.
+Only Google Drive is touched during Wipe. (See Google Photos limits below).
+
+## Google Photos Support & API Limitations
+
+The app can also connect to Google Photos. You can select your active service on the Dashboard.
+However, **Google explicitly restricts their Google Photos API** for third-party apps:
+1. **No Deletions**: It is impossible to delete photos from Google Photos using this app. As a result, the **Wipe** feature is hard-blocked when Google Photos is active.
+2. **Quality**: Downloads through the API are slightly compressed (not "original quality" byte-for-byte).
 
 ## Updates
 
@@ -107,4 +114,6 @@ is tracked in [PROBLEMS.md](PROBLEMS.md).
 - Verification result expires (default 24 h) — re-verify before wiping, on purpose.
 - UI stack: NiceGUI (Quasar/Material) served by uvicorn, rendered in a native
   window (separate window process, so a busy WebView2 can never stall the app).
+  Includes a Premium Glassmorphism design system that automatically shifts between
+  Light and Dark mode matching your Windows OS preference.
 - Not affiliated with Google. rclone is used under its MIT license.

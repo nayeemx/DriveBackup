@@ -8,7 +8,9 @@ REPORT_DIR = APP_DIR / "reports"
 CONFIG_FILE = APP_DIR / "config.json"
 
 DEFAULTS = {
-    "remote": "gdrive",
+    "active_service": "drive",
+    "remote_drive": "gdrive",
+    "remote_photos": "gphotos",
     "transfers": 4,
     "checkers": 8,
     "gemini_api_key": "",
@@ -55,6 +57,11 @@ class Config:
 
     def to_dict(self):
         return dict(self._data)
+
+    @property
+    def active_remote(self):
+        service = self.get("active_service", "drive")
+        return self.get(f"remote_{service}")
 
 
 def state_path(name: str) -> Path:

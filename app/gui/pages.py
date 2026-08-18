@@ -57,16 +57,38 @@ class DashboardPage:
         self.guide_text = None
         self.guide_btn = None
         self._guide_step = ""
+        self.service_select = None
+        self._photos_notice = None
 
     def build(self, parent=None):
         with parent or nullcontext():
             page_header(
                 "cloud_download",
-                "Google Drive Backup",
+                "Google Drive & Photos Backup",
                 "Back up everything, verify it, then safely wipe your Drive - "
                 "with AI analysis in between.")
+
+            # Service selector
+            with ui.card().props("flat bordered").classes("w-full mb-3 p-3"):
+                ui.label("ACTIVE SERVICE").classes(
+                    "text-[10px] font-semibold uppercase tracking-[0.16em]") \
+                    .style(f"color:{MUTED}")
+                self.service_select = ui.select(
+                    {"drive": "🗄️  Google Drive",
+                     "photos": "🖼️  Google Photos"},
+                    value=self.ctx.config.get("active_service", "drive"),
+                    on_change=self._service_changed,
+                ).props("outlined dense").classes("w-full max-w-xs mt-1")
+                self._photos_notice = ui.label(
+                    "⚠️  Google Photos: backup & analysis only. "
+                    "Deletion is blocked by Google's API."
+                ).classes("text-xs mt-1").style(f"color:{WARN}") \
+                    .bind_visibility_from(
+                    self.service_select, "value",
+                    backward=lambda v: v == "photos")
+
             with ui.row().classes("w-full items-center gap-2 mb-4"):
-                self.connect_btn = ui.button("Connect Google Drive", icon="link",
+                self.connect_btn = ui.button("Connect", icon="link",
                                              on_click=self._connect)\
                     .props("color=primary no-caps")
                 self.disconnect_btn = ui.button("Disconnect account", icon="link_off",
@@ -102,6 +124,7 @@ class DashboardPage:
                                                 PRIMARY)
                 self.stats["files"] = StatCard("Files", "-", "description", INFO)
             self.refresh()
+            self._refresh_connect_label()
 
     def _guide_action(self):
         step = self._guide_step
@@ -116,9 +139,21 @@ class DashboardPage:
                    "Analyze": "Analyze", "Wipe": "Wipe"}
         self.navigate(mapping.get(step, "Dashboard"))
 
+    def _service_changed(self, e):
+        self.ctx.config.set("active_service", e.value)
+        self._refresh_connect_label()
+        self.refresh()
+
+    def _refresh_connect_label(self):
+        if not self.connect_btn:
+            return
+        svc = self.ctx.config.get("active_service", "drive")
+        label = "Connect Google Photos" if svc == "photos" else "Connect Google Drive"
+        self.connect_btn.set_text(label)
+
     def refresh(self):
         ctx = self.ctx
-        remote = ctx.config.get("remote")
+        remote = ctx.config.active_remote
         connected = ctx.manager.remote_exists(remote)
         if not connected:
             self.stats["state"].set("Not connected", MUTED)
@@ -214,10 +249,14 @@ class DashboardPage:
         if self.connect_btn:
             self.connect_btn.disable()
             self.connect_btn.set_text("Connecting ...")
+        svc = ctx.config.get("active_service", "drive")
+        remote = ctx.config.active_remote
+        backend_type = "google photos" if svc == "photos" else "drive"
         ctx.start_job(
             "connect",
             lambda hub: ctx.manager.connect(
-                ctx.config.get("remote"),
+                remote,
+                backend_type,
                 ctx.config.get("export_formats"),
                 auth_cb=lambda url, ce=None: hub.ask_auth_url(url, ce),
                 code_cb=lambda: hub.ask_code(),
@@ -228,17 +267,19 @@ class DashboardPage:
     def _connect_done(self, result, error):
         from .widgets import connect_dialog_status
         self.ctx.finish_job("connect")
+        svc = self.ctx.config.get("active_service", "drive")
+        svc_label = "Google Photos" if svc == "photos" else "Google Drive"
         if self.connect_btn:
             self.connect_btn.enable()
-            self.connect_btn.set_text("Connect Google Drive")
+            self._refresh_connect_label()
         if error:
             connect_dialog_status(f"Connection failed: {error}", ok=False)
             ui.notify(f"Connection failed: {error}", type="negative",
                       position="top-right")
             return
-        connect_dialog_status("Connected! Google Drive is ready.", ok=True)
-        self.ctx.hub.log("SUCCESS", "Google Drive connected.")
-        ui.notify("Google Drive connected", type="positive", position="top-right")
+        connect_dialog_status(f"Connected! {svc_label} is ready.", ok=True)
+        self.ctx.hub.log("SUCCESS", f"{svc_label} connected.")
+        ui.notify(f"{svc_label} connected", type="positive", position="top-right")
         self.refresh()
 
     def _disconnect(self):
@@ -253,7 +294,7 @@ class DashboardPage:
 
     def _disconnect_start(self):
         ctx = self.ctx
-        remote = ctx.config.get("remote")
+        remote = ctx.config.active_remote
         if self.disconnect_btn:
             self.disconnect_btn.disable()
         ctx.start_job(
@@ -1009,6 +1050,25 @@ class WipePage:
                 "Wipe",
                 "Deletes the files on your Google Drive - only after your "
                 "backup is verified.")
+
+            # Google Photos API hard block
+            svc = self.ctx.config.get("active_service", "drive")
+            if svc == "photos":
+                with ui.card().props("flat bordered").classes("w-full p-4 mt-4") \
+                        .style("border-color: rgba(244,180,0,0.5);"):
+                    with ui.row().classes("items-center gap-3"):
+                        ui.icon("block").classes("text-4xl").style(
+                            f"color:{WARN}")
+                        with ui.column().classes("gap-1"):
+                            ui.label("Wipe is not available for Google Photos") \
+                                .classes("text-lg font-semibold").style(
+                                f"color:{WARN}")
+                            ui.label(
+                                "Google's API explicitly prohibits third-party apps "
+                                "from deleting media from Google Photos. "
+                                "Switch to Google Drive on the Dashboard to use Wipe."
+                            ).classes("text-sm").style(f"color:{MUTED}")
+                return
             info_card(
                 "delete_forever",
                 "What Wipe deletes",
@@ -1445,108 +1505,53 @@ class HelpPage:
     def build(self, parent=None):
         with parent or nullcontext():
             page_header("help", "Help & Guide",
-                        "How DriveBackup works, step by step - in plain language.")
-            with ui.card().classes("w-full max-w-3xl").props("flat bordered"):
-                ui.label("The 5-step journey").classes(
-                    "text-[10px] font-semibold uppercase tracking-[0.16em]") \
-                    .style(f"color:{MUTED}")
-                steps = [
-                    ("1. Connect", "Dashboard - Connect Google Drive",
-                     "One click, sign in with Google in your browser, come "
-                     "back. That's it - the app is ready."),
-                    ("2. Back up", "Backup tab",
-                     "Choose a local folder (an empty one, on your PC or an "
-                     "external drive) and what to back up: everything, or "
-                     "only certain folders. The app downloads each file and "
-                     "saves a manifest."),
-                    ("3. Verify", "Verify tab",
-                     "The app checks that every file exists locally and has "
-                     "the right size and checksum. Wipe stays locked until "
-                     "this passes - this is the guard against deleting "
-                     "something you don't actually have."),
-                    ("4. Analyze (optional)", "Analyze tab",
-                     "See what's in your Drive: duplicates, junk, largest "
-                     "files. Optional AI summary with your own key in "
-                     "Settings."),
-                    ("5. Wipe", "Wipe tab",
-                     "Only once backup + verify passed: move everything to "
-                     "the Trash, then empty the Trash. Nothing is deleted "
-                     "before you confirm twice with the phrase DELETE ALL."),
-                ]
-                for title, where, body in steps:
-                    num = title.split(".", 1)[0].strip()
-                    with ui.row().classes("w-full items-start gap-3 mt-3"):
-                        with ui.element("div").classes(
-                                "w-8 h-8 rounded-lg flex items-center justify-center "
-                                "shrink-0").style(
-                                f"background:rgba(13,148,136,0.12); color:{PRIMARY}"):
-                            ui.label(num).classes("text-sm font-semibold")
-                        with ui.column().classes("gap-0 flex-1"):
-                            ui.label(f"{title} - {where}").classes(
-                                "text-sm font-semibold")
-                            ui.label(body).classes("text-sm") \
-                                .style(f"color:{MUTED}")
+                        "Everything you need to master DriveBackup, visually explained.")
+            
+            with ui.card().classes("w-full max-w-4xl hover-lift").props("flat bordered"):
+                ui.markdown('''
+### 🚀 The 5-Step Journey
 
-            with ui.card().classes("w-full max-w-3xl mt-3").props("flat bordered"):
-                ui.label("Common questions").classes(
-                    "text-[10px] font-semibold uppercase tracking-[0.16em]") \
-                    .style(f"color:{MUTED}")
-                faqs = [
-                    ("Is my data safe?",
-                     "Yes. Everything stays on your PC. Only the optional AI "
-                     "features send file names/sizes to the AI provider you "
-                     "configure in Settings."),
-                    ("Where is the backup stored?",
-                     "In the folder you choose on the Backup tab. The manifest "
-                     "and reports live in %APPDATA%\\DriveBackup."),
-                    ("Does Wipe touch Gmail or Photos?",
-                     "No. Only files in your Google Drive are affected."),
-                    ("What happens to shared files?",
-                     "Files others shared with you are only removed from your "
-                     "view, never deleted."),
-                    ("The app seems slow to start?",
-                     "First launch compiles the UI; later launches are fast. "
-                     "If it still feels slow, check Settings > Check for "
-                     "updates - newer versions fix this."),
-                ]
-                for q, a in faqs:
-                    ui.label(q).classes("text-sm font-semibold mt-3")
-                    ui.label(a).classes("text-sm").style(f"color:{MUTED}")
+Master the safety-first workflow of DriveBackup.
 
-            with ui.card().classes("w-full max-w-3xl mt-3").props("flat bordered"):
-                ui.label("Where things live").classes(
-                    "text-[10px] font-semibold uppercase tracking-[0.16em]") \
-                    .style(f"color:{MUTED}")
-                for path, what in [
-                    (str(state_path("")), "Manifest, inventory, verify result, "
-                                          "reports, logs"),
-                    (str(Path.home() / "DriveBackup"), "Default backup folder "
-                                                       "(choose your own on the "
-                                                       "Backup tab)"),
-                ]:
-                    with ui.row().classes("w-full items-center gap-2 mt-2"):
-                        ui.label(path).classes("text-xs flex-1") \
-                            .style(f"color:{INFO}")
-                        ui.label(what).classes("text-xs") \
-                            .style(f"color:{MUTED}")
+| Step | Action | Description |
+| :--- | :--- | :--- |
+| <span style="color:var(--primary); font-weight:bold;">1. Connect</span> | **Dashboard** | Securely link your Google Drive. We only get access, never your password. |
+| <span style="color:var(--primary); font-weight:bold;">2. Back up</span> | **Backup tab** | Select an empty local folder. We download your files and create a secure manifest. |
+| <span style="color:var(--primary); font-weight:bold;">3. Verify</span> | **Verify tab** | *The Safety Gate.* We check that every local file exactly matches the cloud version. |
+| <span style="color:var(--primary); font-weight:bold;">4. Analyze</span> | **Analyze tab** | Discover duplicates, large files, and junk. Integrate AI for deeper insights. |
+| <span style="color:var(--primary); font-weight:bold;">5. Wipe</span> | **Wipe tab** | *Locked until verified.* Move everything to Drive Trash safely, then empty it forever. |
+''').classes("w-full")
 
-            with ui.card().classes("w-full max-w-3xl mt-3").props("flat bordered"):
-                ui.label("Troubleshooting").classes(
-                    "text-[10px] font-semibold uppercase tracking-[0.16em]") \
-                    .style(f"color:{MUTED}")
-                for q, a in [
-                    ("Connect keeps failing",
-                     "Sign out of Google in the browser and try again. The "
-                     "app never sees your password - only Google does."),
-                    ("Backup says the folder must be empty",
-                     "Choose a new empty folder, or move the existing files "
-                     "out first - the app refuses to mix backups."),
-                    ("Verify fails on some files",
-                     "Delete the failing file locally and re-run Backup - the "
-                     "app will re-download it and refresh the manifest."),
-                    ("Everything else",
-                     "Open %APPDATA%\\DriveBackup\\logs - the log lines show "
-                     "exactly what each step did."),
-                ]:
-                    ui.label(q).classes("text-sm font-semibold mt-3")
-                    ui.label(a).classes("text-sm").style(f"color:{MUTED}")
+            with ui.card().classes("w-full max-w-4xl mt-4 hover-lift").props("flat bordered"):
+                ui.markdown('''
+### 🛡️ Common Questions & Security
+
+**Is my data actually safe?**
+Yes. Everything stays on your local PC. The only exception is if you explicitly enable the optional AI features, which send file metadata (names and sizes, not the contents) to the AI provider you configured.
+
+**Does Wipe touch my Gmail or Google Photos?**
+No. Wipe is strictly scoped to Google Drive files.
+
+**What happens to files shared with me?**
+Wipe simply removes them from your view. It does not delete the original files owned by others.
+''').classes("w-full")
+
+            with ui.card().classes("w-full max-w-4xl mt-4 hover-lift").props("flat bordered"):
+                ui.markdown(f'''
+### 📂 Data Locations
+
+Knowing where your data lives is key to staying organized.
+
+- **Manifest & Logs:** `{str(state_path(""))}`
+- **Default Backup Folder:** `{str(Path.home() / "DriveBackup")}` *(You can change this on the Backup tab)*
+''').classes("w-full")
+
+            with ui.card().classes("w-full max-w-4xl mt-4 hover-lift").props("flat bordered"):
+                ui.markdown('''
+### 🔧 Troubleshooting Guide
+
+- **Connection failing?** Sign out of Google in your browser and try again.
+- **Folder must be empty?** DriveBackup refuses to mix backups to prevent data corruption. Select a brand new folder.
+- **Verify keeps failing?** Delete the specific failing file locally and re-run Backup. It will seamlessly resume and fix the manifest.
+- **Still stuck?** Check the logs in `%APPDATA%\\DriveBackup\\logs` for detailed technical traces.
+''').classes("w-full")

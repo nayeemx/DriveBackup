@@ -109,3 +109,23 @@ fix was verified. Status legend: **SOLVED** (verified), **WORKAROUND**
 | Symptom | `wipe_test.py` hung twice when run after other tests. |
 | Analysis | Likely rclone leftovers / the test's isolated temp app-data downloading rclone on first use; unrelated to the app itself (smoke and AI tests pass; the wipe engine was verified earlier). |
 | Workaround | Run tests individually with a warm rclone cache. |
+
+## 12. Google Photos: Wipe is unavailable (API design limitation)
+
+| | |
+|---|---|
+| Status | **BY DESIGN — not fixable without direct API auth** |
+| Symptom | Users cannot delete photos from Google Photos using this app. The Wipe tab is hard-blocked when Google Photos is the active service. |
+| Root cause | The Google Photos API (v1) explicitly **does not provide a delete endpoint** for third-party apps. It is not a permission problem — deletion is architecturally impossible via the API, regardless of OAuth scopes. |
+| Fix | Not applicable. The `WipePage.build()` method detects `active_service == "photos"` and renders a clear, user-friendly notice explaining the restriction and instructing the user to switch back to Google Drive if they need Wipe functionality. |
+| Verification | Manual: switch active service to Google Photos on Dashboard → navigate to Wipe → confirm block notice appears. |
+| Notes | This is the same limitation every third-party Google Photos tool faces (e.g., the popular Mylio, Google Takeout, etc.). The only way to delete photos is via the Google Photos website/app directly. |
+
+## 13. UI/UX: Automatic Light/Dark Theme
+
+| | |
+|---|---|
+| Status | **IMPLEMENTED** |
+| Context | The app used to have a hardcoded dark theme. The user requested the theme automatically match the host Windows system theme. |
+| Solution | The entire CSS design system in `app/gui/app.py` was migrated to CSS custom properties (`--primary`, `--bg`, `--card`, etc.) and a `@media (prefers-color-scheme: dark)` block that redefines all variables for dark mode. The `widgets.py` tokens now use `var(--primary)` etc. rather than hardcoded hex values. |
+| Notes | The user cannot manually override the theme — it is exclusively driven by the OS setting. The color palette is inspired by Google's Material Design: Blue `#4285F4`, Green `#0F9D58`, Yellow `#F4B400`, Red `#DB4437`. |
