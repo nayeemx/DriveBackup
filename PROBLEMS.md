@@ -180,3 +180,15 @@ fix was verified. Status legend: **SOLVED** (verified), **WORKAROUND**
 | Workaround | Added `--gphotos-proxy` support. Users can run the [gphotosdl](https://github.com/rclone/gphotosdl) proxy (headless browser that downloads original images via the Google Photos website) and configure the proxy URL in Settings → Google Photos. When configured, rclone passes `--gphotos-proxy http://localhost:8282` to download original quality. |
 | Verification | Settings UI shows proxy URL input field with link to gphotosdl setup instructions. When proxy is running, backup downloads original quality images. |
 | Notes | This is the same workaround recommended by rclone docs. The proxy runs a headless browser in the background. Without the proxy, the app works but images are compressed. |
+
+---
+
+## 18. Icons rendering as text (cloud_download, fact_check, etc.)
+
+| | |
+|---|---|
+| Status | **SOLVED** (v0.1.38) |
+| Symptom | Icons in the page headers, dashboard cards, and info cards appeared as raw text (e.g. "cloud_download", "fact_check") instead of the actual icons. |
+| Root cause | The custom typography CSS in `app.py` applied the `Outfit` font family to classes like `.text-xl`, `.text-lg`, and `.font-semibold`. When these sizing classes were used on icon elements (e.g., `ui.icon(...).classes("text-xl")`), the CSS overrode Quasar's default `Material Icons` font family, causing the browser to render the raw text. A previous attempt (v0.1.37) to fix this by importing the font via `@import` failed because the typography class specificity still took precedence. |
+| Fix | v0.1.38 added a global, `!important` CSS rule targeting `.q-icon, .material-icons` to explicitly enforce `font-family: 'Material Icons' !important;`. This ensures all icons render correctly regardless of other typography classes applied to them. |
+| Verification | Manual: verified Dashboard, Verify, Backup, Analyze, Wipe, Settings, and Help pages. All icons render as graphical glyphs instead of text. |

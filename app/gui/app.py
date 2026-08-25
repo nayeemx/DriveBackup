@@ -119,6 +119,11 @@ h1, h2, h3, h4, h5, h6, .text-xl, .text-lg, .font-semibold {
   letter-spacing: -0.02em;
 }
 
+/* Force icons to always use the Material Icons font, overriding any other typography classes */
+.q-icon, .material-icons {
+  font-family: 'Material Icons' !important;
+}
+
 /* Quasar color tokens */
 body { --q-primary: var(--primary); --q-secondary: var(--primary-hover);
        --q-accent: var(--accent); --q-negative: var(--danger);
