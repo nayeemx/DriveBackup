@@ -346,7 +346,8 @@ def build(ctx: AppContext) -> None:
                 "flat dense round size=sm").classes("!ml-0") \
                 .tooltip("Clear console")
         console_box = ui.column().classes("w-full gap-0")
-        ctx.console = LogConsole()
+        with console_box:
+            ctx.console = LogConsole()
 
         def toggle() -> None:
             nonlocal console_visible
