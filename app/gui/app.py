@@ -39,6 +39,7 @@ def pick_port(start: int = 8085, tries: int = 15) -> int:
 # ---- UI UX Pro Max: Premium Glassmorphism Design System -------------------
 CSS = """
 @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/icon?family=Material+Icons');
 
 :root {
   --bg: #F8F9FA;
