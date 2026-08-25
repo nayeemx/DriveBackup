@@ -10,9 +10,10 @@ App: backup / verify / wipe files on your own Google Drive; per-file selection,
 disconnect account, AI analysis report (OpenRouter key optional).
 
 ## Current state (last session ended)
-- **Latest released version: v0.1.36** — live on GitHub
-  https://github.com/nayeemx/DriveBackup/releases/tag/v0.1.36
-  (DriveBackup-Setup-0.1.36.exe, 51.4 MB, state=uploaded, released 2026-08-25).
+- **Latest released version: v0.1.37** — live on GitHub
+  https://github.com/nayeemx/DriveBackup/releases/tag/v0.1.37
+  (DriveBackup-Setup-0.1.37.exe, 51.4 MB, state=uploaded, released 2026-08-25).
+- v0.1.37 fixes Material Icons font not loading (icons were showing as text).
 - v0.1.36 fixes UI overflow, hover, table heights, and updates Help page.
 - v0.1.35 fixes console minimize button.
 - v0.1.34 fixes verify hash mismatch, Google Photos remote detection, adds gphotosdl proxy.
