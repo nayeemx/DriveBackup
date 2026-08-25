@@ -118,7 +118,7 @@ class StatCard:
                         "w-9 h-9 rounded-lg flex items-center justify-center "
                         "shrink-0").style(f"background:var(--input-bg);"
                                           f"color:{color}; box-shadow: 0 0 10px var(--shadow-color)"):
-                    ui.icon(icon).classes("text-lg")
+                    self.icon_el = ui.icon(icon).classes("text-lg")
                 with ui.column().classes("gap-0 flex-1 min-w-0"):
                     self.label_el = ui.label(label).classes(
                         "text-[10px] font-semibold uppercase tracking-[0.14em]") \
@@ -130,6 +130,11 @@ class StatCard:
         self.value_el.set_text(str(value))
         if color:
             self.value_el.style(f"color: {color}")
+
+    def set_icon(self, icon: str, color: Optional[str] = None) -> None:
+        self.icon_el.set_icon(icon)
+        if color:
+            self.icon_el.style(f"color: {color}")
 
 
 def _rgb(hex_color: str, alpha: str = "0.12") -> str:

@@ -170,6 +170,7 @@ class DashboardPage:
         connected = ctx.manager.remote_exists(remote)
         if not connected:
             self.stats["state"].set("Not connected", MUTED)
+            self.stats["state"].set_icon("cloud_off", MUTED)
             self.stats["total"].set("-")
             self.stats["used"].set("-")
             self.stats["free"].set("-")
@@ -189,6 +190,7 @@ class DashboardPage:
             ctx.hub.log("WARNING", "Drive not connected - click 'Connect Google Drive'.")
             return
         self.stats["state"].set("Connected", GOOD)
+        self.stats["state"].set_icon("cloud_done", GOOD)
         if self.disconnect_btn:
             self.disconnect_btn.set_visibility(True)
         manifest = bk.load_manifest()
@@ -1261,9 +1263,13 @@ class WipePage:
         self._update_buttons()
 
     def _update_buttons(self) -> None:
+        if not self.phrase or not self.checkbox:
+            return
         phrase_ok = (self.phrase.value or "").strip().upper() == "DELETE ALL"
         enabled = bool(self.checkbox.value) and phrase_ok
         for b in (self.trash_btn, self.empty_btn, self.purge_btn):
+            if b is None:
+                continue
             if enabled:
                 b.enable()
             else:
