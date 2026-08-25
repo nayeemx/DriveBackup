@@ -8,23 +8,24 @@ import tempfile
 import threading
 import zipfile
 from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Union
 
 from ..utils.config import APP_DIR
 from ..utils.logging_utils import get_logger
 
-TOOLS_DIR = APP_DIR / "tools"
-RCLONE_EXE = TOOLS_DIR / "rclone.exe"
-RCLONE_URL = "https://downloads.rclone.org/rclone-current-windows-amd64.zip"
+TOOLS_DIR: Path = APP_DIR / "tools"
+RCLONE_EXE: Path = TOOLS_DIR / "rclone.exe"
+RCLONE_URL: str = "https://downloads.rclone.org/rclone-current-windows-amd64.zip"
 LOG = get_logger()
 
 
-def _bundled_binary():
+def _bundled_binary() -> Optional[Path]:
     """rclone.exe shipped inside the installer (PyInstaller onedir/_MEIPASS).
 
     Returns a path to the bundled binary, or None if the app was not
     installed with one (e.g. dev checkout).
     """
-    candidates = []
+    candidates: list[Path] = []
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
         candidates.append(Path(meipass) / "tools" / "rclone.exe")
@@ -35,7 +36,7 @@ def _bundled_binary():
     return None
 
 
-def _no_window_kwargs() -> dict:
+def _no_window_kwargs() -> dict[str, int]:
     """Keep console-subsystem children (rclone) from flashing a terminal.
 
     A GUI app (no console) spawning a console exe without this flag makes
@@ -52,12 +53,12 @@ class RcloneError(RuntimeError):
 
 
 class RcloneManager:
-    def __init__(self, exe_path=None):
-        self.exe = Path(exe_path) if exe_path else self._find_binary()
-        self._token_path = APP_DIR / "rclone.conf"
+    def __init__(self, exe_path: Optional[Union[str, Path]] = None) -> None:
+        self.exe: Optional[Path] = Path(exe_path) if exe_path else self._find_binary()
+        self._token_path: Path = APP_DIR / "rclone.conf"
 
     # ---------------------------------------------------------------- binary
-    def _find_binary(self):
+    def _find_binary(self) -> Optional[Path]:
         for candidate in (RCLONE_EXE,):
             if candidate.exists():
                 return candidate
@@ -66,7 +67,7 @@ class RcloneManager:
             return Path(found)
         return None
 
-    def ensure_binary(self, progress=None):
+    def ensure_binary(self, progress: Optional[Callable[[str], None]] = None) -> Path:
         if self.exe and self.exe.exists():
             return self.exe
         bundled = _bundled_binary()
@@ -85,18 +86,27 @@ class RcloneManager:
         if progress:
             progress("Extracting rclone ...")
         with zipfile.ZipFile(zip_path) as zf:
+            for info in zf.infolist():
+                target = (TOOLS_DIR / info.filename).resolve()
+                if not str(target).startswith(str(TOOLS_DIR.resolve())):
+                    raise RcloneError(f"Zip entry attempts path traversal: {info.filename}")
             zf.extractall(TOOLS_DIR)
         zip_path.unlink()
-        extracted = next(TOOLS_DIR.glob("rclone-*-windows-amd64/rclone.exe"))
+        matches = list(TOOLS_DIR.glob("rclone-*-windows-amd64/rclone.exe"))
+        if not matches:
+            raise RcloneError("rclone.zip did not contain the expected executable")
+        extracted = matches[0]
         shutil.move(str(extracted), str(RCLONE_EXE))
         shutil.rmtree(extracted.parent, ignore_errors=True)
         self.exe = RCLONE_EXE
         LOG.info(f"rclone installed at {RCLONE_EXE}")
         return self.exe
 
-    def _download(self, url, dest, progress=None, tries=3, timeout=120):
+    def _download(self, url: str, dest: Path,
+                  progress: Optional[Callable[[str], None]] = None,
+                  tries: int = 3, timeout: int = 120) -> None:
         import requests
-        last = None
+        last: Optional[Exception] = None
         for attempt in range(tries):
             try:
                 with requests.get(url, stream=True, timeout=timeout) as resp:
@@ -105,20 +115,22 @@ class RcloneManager:
                         for chunk in resp.iter_content(chunk_size=1024 * 256):
                             fh.write(chunk)
                 return
-            except Exception as exc:  # noqa: BLE001
+            except (requests.RequestException, OSError) as exc:
                 last = exc
                 LOG.warning(f"Download failed (attempt {attempt + 1}): {exc}")
                 if progress:
                     progress(f"Retrying download ({attempt + 1}/{tries}) ...")
         raise RcloneError(f"Failed to download rclone: {last}")
 
-    def version(self):
+    def version(self) -> str:
         out = self.run(["version"], capture=True, log_output=False)
         return out.strip().splitlines()[0] if out else "unknown"
 
     # ------------------------------------------------------------------ runner
-    def run(self, args, capture=False, stdin_data=None, log_output=True,
-            timeout=7200, cwd=None):
+    def run(self, args: list[str], capture: bool = False,
+            stdin_data: Optional[str] = None, log_output: bool = True,
+            timeout: int = 7200,
+            cwd: Optional[Union[str, Path]] = None) -> str:
         if not self.exe or not self.exe.exists():
             self.ensure_binary()
         cmd = [str(self.exe), "--config", str(self._token_path)] + args
@@ -138,8 +150,8 @@ class RcloneManager:
             )
         except subprocess.TimeoutExpired as exc:
             raise RcloneError(f"rclone timed out: {' '.join(args[:2])}") from exc
-        stdout = proc.stdout or ""
-        stderr = proc.stderr or ""
+        stdout: str = proc.stdout or ""
+        stderr: str = proc.stderr or ""
         if log_output:
             for line in stdout.splitlines():
                 LOG.info(line)
@@ -154,7 +166,8 @@ class RcloneManager:
             raise RcloneError(stderr.strip() or f"rclone exited {proc.returncode}")
         return stdout.strip()
 
-    def stream(self, args, line_cb, timeout=7200):
+    def stream(self, args: list[str], line_cb: Callable[[str], None],
+               timeout: int = 7200) -> bool:
         if not self.exe or not self.exe.exists():
             self.ensure_binary()
         cmd = [str(self.exe), "--config", str(self._token_path)] + args
@@ -175,6 +188,10 @@ class RcloneManager:
                     line_cb(line)
         finally:
             try:
+                proc.stdout.close()
+            except (AttributeError, OSError):
+                pass
+            try:
                 proc.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
                 proc.kill()
@@ -184,28 +201,34 @@ class RcloneManager:
         return True
 
     # ------------------------------------------------------------------ remote
-    def listremotes(self):
+    def listremotes(self) -> list[str]:
         out = self.run(["listremotes"], capture=True)
         return [r for r in out.splitlines() if r]
 
-    def remote_exists(self, name):
+    def remote_exists(self, name: str) -> bool:
         return f"{name}:" in self.listremotes()
 
-    def remote_usable(self, name):
+    def remote_usable(self, name: str) -> bool:
         """True if the remote actually works (has a valid token).
 
-        Requires real 'about' output (Total/Used) - an empty or missing
-        remote makes rclone return exit 0 with no output, which must NOT
-        count as usable.
+        Requires real 'about' output - an empty or missing remote makes
+        rclone return exit 0 with no output, which must NOT count as usable.
+        Google Drive returns 'Total:'; Google Photos returns 'Photos:'/'Videos:'.
         """
         try:
             out = self.run(["about", f"{name}:"], capture=True, timeout=60,
                            log_output=False)
-            return bool(out) and "total" in out.lower()
+            if not out:
+                return False
+            lower = out.lower()
+            # Drive: "Total:", "Used:", "Free:"
+            # Google Photos: "Photos:", "Videos:", "Albums:"
+            return any(kw in lower for kw in ("total", "photos:", "videos:"))
         except RcloneError:
             return False
 
-    def disconnect(self, remote, line_cb=LOG.info):
+    def disconnect(self, remote: str,
+                   line_cb: Callable[[str], None] = LOG.info) -> bool:
         """Revoke the token and remove the remote from rclone's config.
 
         The account is fully disconnected: the stored token is deleted, so
@@ -222,7 +245,10 @@ class RcloneManager:
         self.run(["config", "delete", remote], capture=True, log_output=False)
         return True
 
-    def connect(self, remote, backend_type, export_formats, auth_cb, code_cb):
+    def connect(self, remote: str, backend_type: str,
+                export_formats: Optional[str],
+                auth_cb: Optional[Callable[[str, threading.Event], None]],
+                code_cb: Optional[Callable[[], Optional[str]]]) -> bool:
         if self.remote_exists(remote) and self.remote_usable(remote):
             return True
         if self.remote_exists(remote):
@@ -251,18 +277,18 @@ class RcloneManager:
             errors="replace",
             **_no_window_kwargs(),
         )
-        url = None
-        code_sent = False
+        url: Optional[str] = None
+        code_sent: bool = False
         cancel_event = threading.Event()
 
-        def write_line(text):
+        def write_line(text: str) -> None:
             try:
                 proc.stdin.write(text + "\n")
                 proc.stdin.flush()
             except (BrokenPipeError, OSError, ValueError):
                 pass
 
-        def read_output():
+        def read_output() -> None:
             nonlocal url, code_sent
             buffer = ""
             while True:
@@ -322,16 +348,16 @@ class RcloneManager:
         return True
 
     # ---------------------------------------------------------------- commands
-    def about(self, remote):
+    def about(self, remote: str) -> dict[str, str]:
         out = self.run(["about", f"{remote}:"], capture=True)
-        parsed = {}
+        parsed: dict[str, str] = {}
         for line in out.splitlines():
-            if ":" in line:
-                key, _, value = line.partition(":")
+            key, _, value = line.partition(":")
+            if key.strip():
                 parsed[key.strip().lower()] = value.strip()
         return parsed
 
-    def about_cached(self, remote, ttl=60):
+    def about_cached(self, remote: str, ttl: int = 60) -> dict[str, str]:
         """about() with a short TTL cache.
 
         The UI polls stats regularly; hitting the network (and Google's
@@ -339,21 +365,28 @@ class RcloneManager:
         must never block the event loop.
         """
         import time
-        cache = getattr(self, "_about_cache", {})
-        cached, ts = cache.get(remote, (None, 0))
+        cache: dict[str, tuple[dict[str, str], float]] = getattr(self, "_about_cache", {})
+        lock = getattr(self, "_about_cache_lock", None)
+        if lock is None:
+            lock = threading.Lock()
+            self._about_cache_lock = lock
+        with lock:
+            cached, ts = cache.get(remote, (None, 0))
         now = time.time()
         if cached is not None and now - ts < ttl:
             return cached
         try:
             result = self.about(remote)
-        except Exception:
+        except RcloneError:
             if cached is not None:
                 return cached
             raise
-        self._about_cache = {**cache, remote: (result, now)}
+        with lock:
+            self._about_cache = {**cache, remote: (result, now)}
         return result
 
-    def lsjson(self, remote, root="", trashed=False):
+    def lsjson(self, remote: str, root: str = "",
+               trashed: bool = False) -> list[dict[str, Any]]:
         args = ["lsjson", "--recursive", "--files-only", "--hash",
                 "--fast-list", "-M"]
         if trashed:
@@ -368,8 +401,11 @@ class RcloneManager:
         except (ValueError, json.JSONDecodeError) as exc:
             raise RcloneError(f"Failed to parse lsjson output: {exc}") from exc
 
-    def copy(self, remote, local_dir, transfers, checkers, line_cb, root="",
-             extra_args=None):
+    def copy(self, remote: str, local_dir: Union[str, Path],
+             transfers: int, checkers: int,
+             line_cb: Callable[[str], None], root: str = "",
+             extra_args: Optional[list[str]] = None,
+             gphotos_proxy: str = "") -> bool:
         args = [
             "copy", f"{remote}:{root}", str(local_dir),
             "--create-empty-src-dirs",
@@ -382,12 +418,16 @@ class RcloneManager:
             "--stats-log-level", "NOTICE",
             "-v",
         ]
+        if gphotos_proxy:
+            args += ["--gphotos-proxy", gphotos_proxy]
         if extra_args:
             args += list(extra_args)
         return self.stream(args, line_cb)
 
-    def check(self, remote, local_dir, transfers, checkers, download, line_cb,
-              root=""):
+    def check(self, remote: str, local_dir: Union[str, Path],
+              transfers: int, checkers: int, download: bool,
+              line_cb: Callable[[str], None], root: str = "",
+              gphotos_proxy: str = "") -> bool:
         args = [
             "check", f"{remote}:{root}", str(local_dir),
             "--fast-list",
@@ -397,9 +437,11 @@ class RcloneManager:
         ]
         if download:
             args.append("--download")
+        if gphotos_proxy:
+            args += ["--gphotos-proxy", gphotos_proxy]
         return self.stream(args, line_cb)
 
-    def backend_type(self, remote):
+    def backend_type(self, remote: str) -> str:
         out = self.run(["config", "show", remote, "--json"], capture=True,
                        log_output=False)
         try:
@@ -407,7 +449,8 @@ class RcloneManager:
         except (ValueError, json.JSONDecodeError):
             return ""
 
-    def delete_all(self, remote, use_trash, line_cb, root=""):
+    def delete_all(self, remote: str, use_trash: bool,
+                   line_cb: Callable[[str], None], root: str = "") -> bool:
         args = [
             "delete", f"{remote}:{root}",
             "--fast-list",
@@ -417,7 +460,9 @@ class RcloneManager:
             args.append("--drive-use-trash")
         return self.stream(args, line_cb)
 
-    def delete_files(self, remote, files, use_trash, line_cb, root=""):
+    def delete_files(self, remote: str, files: list[str], use_trash: bool,
+                     line_cb: Callable[[str], None],
+                     root: str = "") -> bool:
         """Delete exactly the listed files (relative paths, one per line).
 
         Uses rclone's --files-from-raw so paths are taken literally -
@@ -425,7 +470,7 @@ class RcloneManager:
         """
         if not files:
             return True
-        tmp = None
+        tmp: Optional[str] = None
         try:
             with tempfile.NamedTemporaryFile(
                     "w", suffix=".txt", delete=False,
@@ -444,12 +489,21 @@ class RcloneManager:
             return self.stream(args, line_cb)
         finally:
             if tmp:
-                try:
-                    os.unlink(tmp)
-                except OSError:
-                    pass
+                import time
+                for _ in range(10):
+                    try:
+                        os.unlink(tmp)
+                        break
+                    except OSError:
+                        time.sleep(0.2)
+                else:
+                    try:
+                        os.unlink(tmp)
+                    except OSError:
+                        LOG.warning(f"Could not remove temp file: {tmp}")
 
-    def empty_trash(self, remote, line_cb):
+    def empty_trash(self, remote: str,
+                    line_cb: Callable[[str], None]) -> bool:
         if self.backend_type(remote) != "drive":
             LOG.info(f"{remote}: no trash support - nothing to empty")
             return True

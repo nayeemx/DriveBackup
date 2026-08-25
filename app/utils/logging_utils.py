@@ -1,6 +1,8 @@
 import logging
+import logging.handlers
 import sys
 from datetime import datetime
+from typing import Callable, Optional
 
 from .config import APP_DIR
 
@@ -9,14 +11,14 @@ LOG_FILE = APP_DIR / "app.log"
 
 
 class ConsoleHandler(logging.Handler):
-    def __init__(self, callback=None):
+    def __init__(self, callback: Optional[Callable[[str, str], None]] = None) -> None:
         super().__init__()
         self._callback = callback
 
-    def set_callback(self, callback):
+    def set_callback(self, callback: Callable[[str, str], None]) -> None:
         self._callback = callback
 
-    def emit(self, record):
+    def emit(self, record: logging.LogRecord) -> None:
         msg = self.format(record)
         if self._callback:
             try:
@@ -34,7 +36,9 @@ _logger.propagate = False
 _fmt = logging.Formatter(
     "%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S"
 )
-_file_handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
+_file_handler = logging.handlers.RotatingFileHandler(
+    LOG_FILE, encoding="utf-8", maxBytes=5 * 1024 * 1024, backupCount=3
+)
 _file_handler.setFormatter(_fmt)
 _logger.addHandler(_file_handler)
 
@@ -43,15 +47,15 @@ _console.setFormatter(logging.Formatter("%(message)s"))
 _logger.addHandler(_console)
 
 
-def set_console_callback(callback):
+def set_console_callback(callback: Callable[[str, str], None]) -> None:
     _console.set_callback(callback)
 
 
-def get_logger():
+def get_logger() -> logging.Logger:
     return _logger
 
 
-def log(line: str, level: str = "INFO"):
+def log(line: str, level: str = "INFO") -> None:
     getattr(_logger, level.lower(), _logger.info)(line)
 
 

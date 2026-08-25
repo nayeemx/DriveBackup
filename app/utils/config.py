@@ -1,13 +1,14 @@
 import json
 import os
 from pathlib import Path
+from typing import Any, Callable, Optional, Union
 
-APP_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / "DriveBackup"
-STATE_DIR = APP_DIR / "state"
-REPORT_DIR = APP_DIR / "reports"
-CONFIG_FILE = APP_DIR / "config.json"
+APP_DIR: Path = Path(os.environ.get("APPDATA", str(Path.home()))) / "DriveBackup"
+STATE_DIR: Path = APP_DIR / "state"
+REPORT_DIR: Path = APP_DIR / "reports"
+CONFIG_FILE: Path = APP_DIR / "config.json"
 
-DEFAULTS = {
+DEFAULTS: dict[str, Any] = {
     "active_service": "drive",
     "remote_drive": "gdrive",
     "remote_photos": "gphotos",
@@ -22,6 +23,7 @@ DEFAULTS = {
     "github_owner": "",
     "github_repo": "",
     "auto_update": "prompt",
+    "gphotos_proxy": "",
 }
 
 STATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -29,37 +31,52 @@ REPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 class Config:
-    def __init__(self):
-        self._data = {}
+    _VALIDATORS: dict[str, Callable[[Any], Any]] = {
+        "transfers": lambda v: max(1, min(16, int(v))),
+        "checkers": lambda v: max(1, min(32, int(v))),
+        "verify_freshness_hours": lambda v: max(1, min(720, int(v))),
+        "auto_update": lambda v: v if v in ("prompt", "silent", "off") else "prompt",
+        "active_service": lambda v: v if v in ("drive", "photos") else "drive",
+        "ai_provider": lambda v: v if v in ("gemini", "openrouter") else "gemini",
+    }
+
+    def __init__(self) -> None:
+        self._data: dict[str, Any] = {}
         self.load()
 
-    def load(self):
+    def load(self) -> None:
         if CONFIG_FILE.exists():
             try:
                 self._data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-            except Exception:
+            except (json.JSONDecodeError, OSError):
                 self._data = {}
         for key, value in DEFAULTS.items():
             self._data.setdefault(key, value)
 
-    def save(self):
+    def save(self) -> None:
         CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
         CONFIG_FILE.write_text(
             json.dumps(self._data, indent=2), encoding="utf-8"
         )
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: Any = None) -> Any:
         return self._data.get(key, DEFAULTS.get(key) if default is None else default)
 
-    def set(self, key, value):
+    def set(self, key: str, value: Any) -> None:
+        validator = self._VALIDATORS.get(key)
+        if validator:
+            try:
+                value = validator(value)
+            except (TypeError, ValueError):
+                pass
         self._data[key] = value
         self.save()
 
-    def to_dict(self):
+    def to_dict(self) -> dict[str, Any]:
         return dict(self._data)
 
     @property
-    def active_remote(self):
+    def active_remote(self) -> str:
         service = self.get("active_service", "drive")
         return self.get(f"remote_{service}")
 
@@ -72,7 +89,7 @@ def report_path(name: str) -> Path:
     return REPORT_DIR / name
 
 
-def format_bytes(num: float) -> str:
+def format_bytes(num: Union[float, int, None]) -> str:
     if num is None:
         return "?"
     try:

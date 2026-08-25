@@ -129,3 +129,54 @@ fix was verified. Status legend: **SOLVED** (verified), **WORKAROUND**
 | Context | The app used to have a hardcoded dark theme. The user requested the theme automatically match the host Windows system theme. |
 | Solution | The entire CSS design system in `app/gui/app.py` was migrated to CSS custom properties (`--primary`, `--bg`, `--card`, etc.) and a `@media (prefers-color-scheme: dark)` block that redefines all variables for dark mode. The `widgets.py` tokens now use `var(--primary)` etc. rather than hardcoded hex values. |
 | Notes | The user cannot manually override the theme — it is exclusively driven by the OS setting. The color palette is inspired by Google's Material Design: Blue `#4285F4`, Green `#0F9D58`, Yellow `#F4B400`, Red `#DB4437`. |
+
+## 14. In-app update failed: "PermissionError: WinError 32" + "Installer failed (exit code 5)"
+
+| | |
+|---|---|
+| Status | **SOLVED** (v0.1.33) |
+| Symptom | Updating from Settings (or the startup auto-check) downloaded the new setup exe, then failed: `PermissionError: [WinError 32] The process cannot access the file because it is being used by another process` and/or `UpdateError: Installer failed (exit code 5)`. Later attempts failed with `Installer failed (exit code 1)`. |
+| Root cause | THREE stacked bugs in the update flow: 1) The installer ran WHILE the app was still alive (server + webview window child); Inno's `CloseApplications` cannot close a windowless process, so replacing the running exe failed with access denied (exit 5). 2) The startup auto-check and the Settings manual check could run CONCURRENTLY, both downloading to the SAME `%TEMP%\DriveBackup-Setup-X.exe` - the second `open(dest, "wb")` collided with the first's open handle (WinError 32). `start_job` has no dedup. 3) **v0.1.32's fix backfired**: the `AppMutex` directive makes the silent installer FAIL FAST with exit 1 (initialization failed) whenever the mutex is held - the app's built-in check cannot show its "please close the application" dialog in silent mode. Old app versions (<= v0.1.31) never exit on their own, so updating from them was impossible. |
+| Fix | v0.1.33, kept from v0.1.32: `updater.py` downloads to a UNIQUE pid-suffixed temp file and launches the installer DETACHED (no blocking); `pages.py` `apply_update` refuses a second concurrent update and shuts the app down after launching the installer; the `[Run]` step no longer skips silent installs so the new version relaunches itself. Corrected in v0.1.33: `installer.iss` `InitializeSetup` now WAITS up to 20 s for the app to self-exit (new versions close in <=6 s via the shutdown watchdog), then force-terminates it via `taskkill /IM DriveBackup.exe /F /T` (old versions that never exit). `AppMutex` is retained only as a last-resort guard - it now always finds the mutex released. |
+| Verification | Reproduced all failure modes: v0.1.32 installer + running app = exit 1 in 2.3 s (fail-fast, confirmed twice). v0.1.33 installer + running app (both old 0.1.29 and new 0.1.33): waited ~20 s, killed the app, installed cleanly, exit 0 (~160 s total), version confirmed 0.1.33, app relaunched on port 8085. Installer with app closed: exit 0. |
+| Notes | First execution of a freshly built unsigned exe can transiently fail (Defender/SmartScreen scan, ~30 s window) - see entry #10; it passes on the next run. v0.1.32's release is broken for old-client updates (AppMutex fail-fast) but harmless: `releases/latest` points at 0.1.33, so clients skip it. |
+| Gotcha | Manual `Setup.exe /VERYSILENT` while the app is open now waits up to 20 s and then AUTO-CLOSES the app (taskkill) instead of failing - the update proceeds. |
+
+---
+
+## 15. Verify always reports "HASH MISMATCH" for Google Drive files
+
+| | |
+|---|---|
+| Status | **SOLVED** (v0.1.34) |
+| Symptom | After a successful backup, running local verify always reports "HASH MISMATCH" for every file that has a Drive MD5 hash, even though the files were copied correctly. |
+| Root cause | `md5_of_file()` in `backup.py:23-31` was computing **SHA-256** (64 hex characters) instead of MD5 (32 hex characters). The function name was misleading. When `verify_local()` compared the local hash against Drive's MD5 hash, they never matched because they were different algorithms producing different length strings. |
+| Fix | Changed `hashlib.sha256()` to `hashlib.md5()` in `backup.py:24`. |
+| Verification | Smoke test passes (tests use local rclone remote which doesn't provide hashes, so size-only fallback was exercised). Manual: backup real Google Drive files, run verify — hashes now match correctly. |
+| Notes | This bug was masked by the fact that local rclone remotes don't return MD5 hashes, so the verify code fell through to size-only comparison. Only affects real Google Drive backups. |
+
+---
+
+## 16. Google Photos remote reported as unusable after successful OAuth
+
+| | |
+|---|---|
+| Status | **SOLVED** (v0.1.34) |
+| Symptom | After connecting to Google Photos via OAuth, the Dashboard shows "Not connected" and backup/verify operations fail, even though the rclone config was created successfully. |
+| Root cause | `remote_usable()` in `rclone_manager.py:211-223` checked for `"total"` in the output of `rclone about gphotos:`. Google Drive returns `"Total: X GB"` but Google Photos returns `"Photos: N"` and `"Videos: N"` without a `"Total:"` line. The check returned `False`, causing `connect()` to delete the remote and raise "Authentication failed". |
+| Fix | Updated `remote_usable()` to accept any of `"total"`, `"photos:"`, or `"videos:"` keywords in the about output. |
+| Verification | Connected to Google Photos — Dashboard now shows "Connected" correctly. Backup and verify operations work. |
+| Notes | Google Photos `about` output format differs from Drive. The fix is backwards-compatible: Drive's `"total"` still works. |
+
+---
+
+## 17. Google Photos downloads are compressed (not original quality)
+
+| | |
+|---|---|
+| Status | **WORKAROUND** (v0.1.34) |
+| Symptom | Photos downloaded via the Google Photos API are slightly compressed and may have EXIF location data stripped. This is a Google API limitation, not an app bug. |
+| Root cause | The Google Photos API does not deliver original quality images. Per rclone docs: "The Google API will deliver images and video which aren't full resolution, and/or have EXIF data missing." This is tracked upstream in Google Issue #112096115. |
+| Workaround | Added `--gphotos-proxy` support. Users can run the [gphotosdl](https://github.com/rclone/gphotosdl) proxy (headless browser that downloads original images via the Google Photos website) and configure the proxy URL in Settings → Google Photos. When configured, rclone passes `--gphotos-proxy http://localhost:8282` to download original quality. |
+| Verification | Settings UI shows proxy URL input field with link to gphotosdl setup instructions. When proxy is running, backup downloads original quality images. |
+| Notes | This is the same workaround recommended by rclone docs. The proxy runs a headless browser in the background. Without the proxy, the app works but images are compressed. |

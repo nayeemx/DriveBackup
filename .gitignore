@@ -8,3 +8,4 @@ installer.generated.iss
 gui_test_out.txt
 real_run.txtbuild-log.txt
 tools/
+.aider*

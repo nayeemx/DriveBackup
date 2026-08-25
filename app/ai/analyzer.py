@@ -1,12 +1,13 @@
 import os
 from collections import defaultdict
+from typing import Any, Callable, Dict, List, Optional
 
 from ..engine.backup import get_manifest, load_inventory
 from ..utils.logging_utils import get_logger
 
 LOG = get_logger()
 
-CATEGORIES = {
+CATEGORIES: Dict[str, set[str]] = {
     "Images": {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".svg", ".webp",
                ".heic", ".tiff", ".tif", ".raw", ".ico", ".psd"},
     "Videos": {".mp4", ".mkv", ".mov", ".avi", ".wmv", ".flv", ".webm",
@@ -28,7 +29,7 @@ CATEGORIES = {
                     ".ai", ".fig", ".sketch", ".xcf"},
 }
 
-JUNK_PATTERNS = [
+JUNK_PATTERNS: List[tuple[str, Callable[[str], bool]]] = [
     ("~$ Office temp", lambda n: n.startswith("~$")),
     (".tmp/.temp", lambda n: n.lower().endswith((".tmp", ".temp", ".crdownload", ".part", ".partial"))),
     ("Thumbs.db", lambda n: n.lower() in ("thumbs.db", "ehthumbs.db")),
@@ -50,13 +51,14 @@ def categorize(name: str) -> str:
     return "Other"
 
 
-def analyze(gemini_key: str = "", provider="gemini", model=None):
+def analyze(gemini_key: str = "", provider: str = "gemini",
+            model: Optional[str] = None) -> dict[str, Any]:
     inventory = load_inventory()
     manifest = get_manifest()
     if not inventory and not manifest:
         raise RuntimeError("No inventory or manifest found - run a backup first.")
 
-    items = inventory or [
+    items: List[dict[str, Any]] = inventory or [
         {"Path": f["path"], "Name": os.path.basename(f["path"]),
          "Size": f["size"], "Hashes": {"MD5": f["md5"]} if f["md5"] else {},
          "MimeType": f.get("mime", ""), "ModTime": f.get("modtime", "")}
@@ -65,14 +67,14 @@ def analyze(gemini_key: str = "", provider="gemini", model=None):
 
     total_size = 0
     total_count = len(items)
-    by_cat = defaultdict(lambda: {"count": 0, "size": 0})
-    by_ext = defaultdict(lambda: {"count": 0, "size": 0})
-    by_year = defaultdict(lambda: {"count": 0, "size": 0})
-    hashes = defaultdict(list)
-    junk = defaultdict(list)
-    empty = []
-    top = []
-    other_paths = []
+    by_cat: Dict[str, dict[str, int]] = defaultdict(lambda: {"count": 0, "size": 0})
+    by_ext: Dict[str, dict[str, int]] = defaultdict(lambda: {"count": 0, "size": 0})
+    by_year: Dict[str, dict[str, int]] = defaultdict(lambda: {"count": 0, "size": 0})
+    hashes: Dict[str, List[str]] = defaultdict(list)
+    junk: Dict[str, List[str]] = defaultdict(list)
+    empty: List[str] = []
+    top: List[dict[str, Any]] = []
+    other_paths: List[str] = []
 
     for item in items:
         path = item.get("Path") or item.get("Name") or ""
@@ -104,7 +106,7 @@ def analyze(gemini_key: str = "", provider="gemini", model=None):
                 if fn(name):
                     junk[label].append(path)
                     break
-            except Exception:
+            except (ValueError, TypeError):
                 pass
         top.append({"path": path, "size": size})
 
@@ -137,16 +139,21 @@ def analyze(gemini_key: str = "", provider="gemini", model=None):
                 by_cat["Other"]["size"] -= size
                 ai_classified += 1
 
-    duplicates = [{"md5": h, "paths": paths, "size": _size_of_dup(paths, hashes, items),
-                   "wasted": _wasted(paths, items)}
-                  for h, paths in hashes.items() if len(paths) > 1]
+    duplicates: List[dict[str, Any]] = []
+    _by_path: Dict[str, int] = {item.get("Path") or item.get("Name") or "": item.get("Size", 0) or 0
+                for item in items}
+    for h, paths in hashes.items():
+        if len(paths) > 1:
+            size = _by_path.get(paths[0], 0)
+            wasted = size * (len(paths) - 1)
+            duplicates.append({"md5": h, "paths": paths, "size": size, "wasted": wasted})
     duplicates.sort(key=lambda d: d["wasted"], reverse=True)
     dup_wasted = sum(d["wasted"] for d in duplicates)
 
     junk_size = 0
     for paths in junk.values():
         for p in paths:
-            junk_size += _find_size(p, items)
+            junk_size += _by_path.get(p, 0)
 
     return {
         "count": total_count,
@@ -165,30 +172,31 @@ def analyze(gemini_key: str = "", provider="gemini", model=None):
     }
 
 
-def _size_of_dup(paths, _hashes, items):
-    by_path = {}
-    for item in items:
-        by_path[item.get("Path") or item.get("Name") or ""] = item.get("Size", 0) or 0
+def _size_of_dup(paths: List[str], _hashes: Any,
+                 items: List[dict[str, Any]]) -> int:
+    by_path = {item.get("Path") or item.get("Name") or "": item.get("Size", 0) or 0
+               for item in items}
     return by_path.get(paths[0], 0)
 
 
-def _wasted(paths, items):
+def _wasted(paths: List[str], items: List[dict[str, Any]]) -> int:
     size = _size_of_dup(paths, None, items)
     return size * (len(paths) - 1)
 
 
-def _find_size(path, items):
+def _find_size(path: str, items: List[dict[str, Any]]) -> int:
     for item in items:
         if (item.get("Path") or item.get("Name") or "") == path:
             return item.get("Size", 0) or 0
     return 0
 
 
-def organization_plan(gemini_key: str = "", provider="gemini", model=None):
+def organization_plan(gemini_key: str = "", provider: str = "gemini",
+                      model: Optional[str] = None) -> List[dict[str, Any]]:
     manifest = get_manifest()
     if not manifest:
         raise RuntimeError("No manifest - run a backup first.")
-    plan = []
+    plan: List[dict[str, Any]] = []
     for f in manifest:
         name = os.path.basename(f["path"])
         cat = categorize(name)
@@ -213,9 +221,10 @@ def organization_plan(gemini_key: str = "", provider="gemini", model=None):
     return plan
 
 
-def quality_check(gemini_key: str = "", analysis=None, verify=None,
-                  provider="gemini", model=None):
-    """AI review of the drive analysis. Returns a list of findings."""
+def quality_check(gemini_key: str = "", analysis: Optional[dict[str, Any]] = None,
+                  verify: Optional[dict[str, Any]] = None,
+                  provider: str = "gemini",
+                  model: Optional[str] = None) -> List[dict[str, str]]:
     if not gemini_key:
         return []
     if analysis is None:

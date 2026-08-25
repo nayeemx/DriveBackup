@@ -7,6 +7,11 @@
 
 [Setup]
 AppId={{2E1B8A84-9D3F-4C2A-B5C7-3F9E2D0A6C41}
+; Last-resort guard only: the real close handling is in InitializeSetup
+; below (wait for self-exit, then force-close). If anything is still
+; holding the mutex when Setup's own check runs, Setup fails with exit
+; code 1 in silent mode instead of installing over a running app.
+AppMutex=Local\DriveBackup_SingleInstance_{{2E1B8A84-9D3F-4C2A-B5C7-3F9E2D0A6C41}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher=DriveBackup
@@ -42,9 +47,39 @@ Name: "{autoprograms}\DriveBackup"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\DriveBackup"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,DriveBackup}"; Flags: nowait postinstall skipifsilent
+; no skipifsilent: after an in-app silent update the new version must
+; relaunch on its own (the updater exits the app before the install).
+Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,DriveBackup}"; Flags: nowait postinstall
 
 [Code]
+const
+  APP_MUTEX = 'Local\DriveBackup_SingleInstance_{2E1B8A84-9D3F-4C2A-B5C7-3F9E2D0A6C41}';
+
+procedure Sleep(ms: Longint); external 'Sleep@kernel32.dll stdcall';
+
+function InitializeSetup(): Boolean;
+var
+  n: Integer;
+  ResultCode: Integer;
+begin
+  Result := True;
+  // In-app updates: the app (>= v0.1.32) closes itself right after
+  // launching this installer - give it up to 20 s to exit on its own.
+  n := 0;
+  while CheckForMutexes(APP_MUTEX) and (n < 40) do begin
+    Sleep(500);
+    n := n + 1;
+  end;
+  // Older app versions (<= v0.1.31) never exit on their own: terminate
+  // them so the files can be replaced. The update is explicit, so closing
+  // the app is expected. AppMutex above then passes (exit 1 would occur
+  // in silent mode if anything were still running).
+  if CheckForMutexes(APP_MUTEX) then begin
+    Exec('taskkill.exe', '/IM DriveBackup.exe /F /T', '',
+         SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  end;
+end;
+
 const
   WEBVIEW2_GUID = 'SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
   WEBVIEW2_GUID_32 = 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';

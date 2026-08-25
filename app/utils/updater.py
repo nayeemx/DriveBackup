@@ -11,10 +11,6 @@ GITHUB_API = "https://api.github.com/repos/{owner}/{repo}/releases/latest"
 USER_AGENT = "DriveBackup-Updater/{}".format(APP_VERSION)
 SETUP_PATTERN = re.compile(r"DriveBackup-Setup-(\d+\.\d+\.\d+)\.exe$", re.IGNORECASE)
 
-# Must match DefaultDirName in installer.iss
-INSTALL_DIR = Path(
-    os.environ.get("LOCALAPPDATA", str(Path.home()))) / "DriveBackup"
-
 
 class UpdateError(RuntimeError):
     pass
@@ -109,29 +105,31 @@ def download(url: str, dest: Path, progress=None, tries: int = 3,
     raise UpdateError(f"Failed to download update: {last}")
 
 
-def install_silently(setup_path: Path) -> int:
-    """Run the Inno Setup installer silently. Replaces files in place.
+def launch_installer(setup_path: Path):
+    """Launch the Inno Setup installer DETACHED and return immediately.
 
-    The installer keeps the same AppId, so it upgrades the existing
-    installation without uninstalling and preserves %APPDATA% config.
+    The app must still be running when this is called - the installer
+    (AppMutex in installer.iss, same mutex the app holds for its whole
+    life) waits for this process to exit before touching any files, so
+    there is never a "file in use" conflict. Its [Run] step (no
+    skipifsilent) relaunches the new version once the install completes.
     """
     cmd = [str(setup_path), "/VERYSILENT", "/SUPPRESSMSGBOXES",
            "/NORESTART", "/SP-"]
     kwargs = {}
     if os.name == "nt":
-        kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW",
-                                          0x08000000)
-    proc = subprocess.run(cmd, timeout=1800, stdin=subprocess.DEVNULL,
-                          **kwargs)
-    return proc.returncode
-
-
-def launch_installed():
-    """Start the freshly installed app (Windows only)."""
-    exe = INSTALL_DIR / "DriveBackup.exe"
-    if not exe.exists():
-        raise UpdateError(f"Installed app not found at {INSTALL_DIR}")
-    os.startfile(str(exe))  # noqa: S606 - launching the app we just installed
+        kwargs["creationflags"] = (getattr(subprocess, "CREATE_NO_WINDOW",
+                                           0x08000000)
+                                   | getattr(subprocess, "DETACHED_PROCESS",
+                                             0x00000008))
+        kwargs["close_fds"] = True
+    try:
+        subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL,
+                         **kwargs)
+    except Exception as exc:  # noqa: BLE001
+        raise UpdateError(f"Could not start the installer: {exc}") from exc
 
 
 def check_for_update(owner: str, repo: str):
@@ -143,14 +141,16 @@ def check_for_update(owner: str, repo: str):
 
 
 def install_update(info: ReleaseInfo, progress=None):
-    """Download, install and relaunch an update (raises UpdateError).
+    """Download and launch the setup exe for an in-place update.
 
-    Downloads the setup exe to %TEMP%, runs it silently (in-place upgrade,
-    keeps %APPDATA% settings), then launches the freshly installed app.
+    Downloads to a UNIQUE temp file (pid suffix - two concurrent update
+    flows can no longer collide on the same path), launches the installer
+    detached, then returns. The GUI shuts the app down; the installer
+    waits on AppMutex for this process to fully exit, replaces the files
+    in place (same AppId, %APPDATA% config preserved), and its [Run]
+    step relaunches the new version - so this function must NOT wait.
     """
-    dest = Path(tempfile.gettempdir()) / info.asset_name
+    stem, ext = os.path.splitext(info.asset_name)
+    dest = Path(tempfile.gettempdir()) / f"{stem}-{os.getpid()}{ext}"
     download(info.asset_url, dest, progress=progress)
-    rc = install_silently(dest)
-    if rc != 0:
-        raise UpdateError(f"Installer failed (exit code {rc}).")
-    launch_installed()
+    launch_installer(dest)

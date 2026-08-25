@@ -3,9 +3,10 @@ import json
 import os
 import re
 import tempfile
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Union
 
 from .rclone_manager import RcloneError, manager
 from ..utils.config import format_bytes, state_path
@@ -13,13 +14,13 @@ from ..utils.logging_utils import get_logger, now_iso
 
 LOG = get_logger()
 
-STATS_RE = re.compile(
+STATS_RE: re.Pattern[str] = re.compile(
     r"Transferred:\s+([\d.]+)\s*/\s*([\d.]+)\s+([A-Za-z]+),\s+([\d.]+)%"
 )
-RATE_RE = re.compile(r"(\d+)\s+files?,\s+([\d.]+)\s+([A-Za-z]+)")
+RATE_RE: re.Pattern[str] = re.compile(r"(\d+)\s+files?,\s+([\d.]+)\s+([A-Za-z]+)")
 
 
-def md5_of_file(path: Path, chunk=1024 * 1024):
+def md5_of_file(path: Path, chunk: int = 1024 * 1024) -> str:
     h = hashlib.md5()
     with open(path, "rb") as fh:
         while True:
@@ -30,11 +31,11 @@ def md5_of_file(path: Path, chunk=1024 * 1024):
     return h.hexdigest()
 
 
-def _walk_local(local_dir: Path, workers: int = 8):
+def _walk_local(local_dir: Path, workers: int = 8) -> Dict[str, Any]:
     files = [p for p in local_dir.rglob("*") if p.is_file()]
-    result = {}
+    result: Dict[str, Any] = {}
 
-    def one(path: Path):
+    def one(path: Path) -> tuple[str, dict[str, Any]]:
         try:
             size = path.stat().st_size
             md5 = md5_of_file(path)
@@ -52,42 +53,42 @@ def _walk_local(local_dir: Path, workers: int = 8):
     return result
 
 
-def load_inventory() -> list:
+def load_inventory() -> List[dict[str, Any]]:
     path = state_path("inventory.json")
     if not path.exists():
         return []
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except (json.JSONDecodeError, OSError):
         return []
 
 
-def load_manifest() -> dict:
+def load_manifest() -> dict[str, Any]:
     path = state_path("manifest.json")
     if not path.exists():
         return {}
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except (json.JSONDecodeError, OSError):
         return {}
 
 
-def load_verify_result() -> dict:
+def load_verify_result() -> dict[str, Any]:
     path = state_path("verify_result.json")
     if not path.exists():
         return {}
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except (json.JSONDecodeError, OSError):
         return {}
 
 
-def get_manifest() -> list:
+def get_manifest() -> List[dict[str, Any]]:
     data = load_manifest()
     return data.get("files", [])
 
 
-EXPORT_EXTS = {
+EXPORT_EXTS: Dict[str, str] = {
     "application/vnd.google-apps.document": "docx",
     "application/vnd.google-apps.spreadsheet": "xlsx",
     "application/vnd.google-apps.presentation": "pptx",
@@ -102,7 +103,7 @@ EXPORT_EXTS = {
 }
 
 
-def _drive_md5(item):
+def _drive_md5(item: dict[str, Any]) -> Optional[str]:
     hashes = item.get("Hashes") or {}
     return hashes.get("MD5") or hashes.get("md5")
 
@@ -111,13 +112,7 @@ def is_exported(mime: str) -> bool:
     return bool(mime) and mime.startswith("application/vnd.google-apps")
 
 
-def _match_folders(path: str, prefixes):
-    """True if `path` is inside any of the given folder prefixes.
-
-    Prefixes are drive folder names or paths like "Documents" or
-    "Photos/2026". Matching is exact-folder aware ("Docs" does not match
-    "Documents").
-    """
+def _match_folders(path: str, prefixes: List[str]) -> bool:
     for prefix in prefixes:
         p = prefix.strip("/")
         if not p:
@@ -127,16 +122,11 @@ def _match_folders(path: str, prefixes):
     return False
 
 
-def _scope_filters(include_folders=None, exclude_folders=None,
-                   include_files=None, tmp_list_path=None):
-    """rclone filter args that restrict a copy to the chosen scope.
-
-    include-mode: --include "/<folder>/**" for each folder + --exclude "*"
-    (only these folders). exclude-mode: --exclude "/<folder>/**" for each
-    folder (everything else). file-mode: --files-from-raw with the exact
-    file list (no globbing).
-    """
-    args = []
+def _scope_filters(include_folders: Optional[List[str]] = None,
+                   exclude_folders: Optional[List[str]] = None,
+                   include_files: Optional[List[str]] = None,
+                   tmp_list_path: Optional[str] = None) -> List[str]:
+    args: List[str] = []
     if include_files:
         if not tmp_list_path:
             raise ValueError("include_files needs a temp list file")
@@ -153,8 +143,7 @@ def _scope_filters(include_folders=None, exclude_folders=None,
     return args
 
 
-def _write_files_list(files, tmp_dir):
-    """Write relative paths (one per line) to a temp file for --files-from-raw."""
+def _write_files_list(files: List[str], tmp_dir: Path) -> str:
     fd, path = tempfile.mkstemp(suffix=".txt", dir=str(tmp_dir))
     with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
         for p in files:
@@ -162,9 +151,15 @@ def _write_files_list(files, tmp_dir):
     return path
 
 
-def backup(remote: str, local_dir, transfers=4, checkers=8,
-           line_cb=LOG.info, progress_cb=None, root="",
-           include_folders=None, exclude_folders=None, include_files=None):
+def backup(remote: str, local_dir: Union[str, Path], transfers: int = 4,
+           checkers: int = 8,
+           line_cb: Callable[[str], None] = LOG.info,
+           progress_cb: Optional[Callable[[float, str], None]] = None,
+           root: str = "",
+           include_folders: Optional[List[str]] = None,
+           exclude_folders: Optional[List[str]] = None,
+           include_files: Optional[List[str]] = None,
+           gphotos_proxy: str = "") -> dict[str, Any]:
     local_dir = Path(local_dir)
     local_dir.mkdir(parents=True, exist_ok=True)
     if any(local_dir.iterdir()):
@@ -196,7 +191,7 @@ def backup(remote: str, local_dir, transfers=4, checkers=8,
                 "No files match your selection. The Drive listing may be "
                 "outdated - refresh it and try again.")
     elif includes or excludes:
-        def in_scope(item):
+        def in_scope(item: dict[str, Any]) -> bool:
             path = item.get("Path") or item.get("Name") or ""
             if includes and not _match_folders(path, includes):
                 return False
@@ -216,9 +211,8 @@ def backup(remote: str, local_dir, transfers=4, checkers=8,
     if progress_cb:
         progress_cb(1, "Downloading files ...")
     total = sum(f.get("Size", 0) for f in inventory) or 1
-    copied = 0
 
-    def on_line(line):
+    def on_line(line: str) -> None:
         m = STATS_RE.search(line)
         if m:
             try:
@@ -232,13 +226,13 @@ def backup(remote: str, local_dir, transfers=4, checkers=8,
                 pass
         line_cb(line)
 
-    tmp_list = None
+    tmp_list: Optional[str] = None
     try:
         if files_only:
             tmp_list = _write_files_list(files_only, local_dir.parent)
         filters = _scope_filters(includes, excludes, files_only, tmp_list)
         manager.copy(remote, local_dir, transfers, checkers, on_line, root=root,
-                     extra_args=filters)
+                     extra_args=filters, gphotos_proxy=gphotos_proxy)
     finally:
         if tmp_list:
             try:
@@ -251,14 +245,14 @@ def backup(remote: str, local_dir, transfers=4, checkers=8,
     local = _walk_local(local_dir)
     LOG.info(f"Local files after copy: {len(local)}")
 
-    files = []
+    result_files: List[dict[str, Any]] = []
     for item in inventory:
         path = item.get("Path") or item.get("Name")
         size = item.get("Size", 0)
         md5 = _drive_md5(item)
         mime = item.get("MimeType", "")
         exported = is_exported(mime)
-        local_meta = None
+        local_meta: Optional[dict[str, Any]] = None
         if exported:
             stem = os.path.splitext(path)[0]
             ext = EXPORT_EXTS.get(mime, "docx")
@@ -269,7 +263,7 @@ def backup(remote: str, local_dir, transfers=4, checkers=8,
                     break
         else:
             local_meta = local.get(path)
-        files.append({
+        result_files.append({
             "path": path,
             "size": size,
             "md5": md5,
@@ -283,17 +277,17 @@ def backup(remote: str, local_dir, transfers=4, checkers=8,
         "created": now_iso(),
         "remote": remote,
         "local_dir": str(local_dir),
-        "files": files,
+        "files": result_files,
     }
     state_path("manifest.json").write_text(
         json.dumps(manifest, indent=1), encoding="utf-8")
 
-    ok = sum(1 for f in files if f["local"])
-    missing = len(files) - ok
+    ok = sum(1 for f in result_files if f["local"])
+    missing = len(result_files) - ok
     LOG.info(f"Backup manifest: {ok} files present locally, {missing} missing")
     return {
-        "files": len(files),
-        "bytes": sum(f["size"] for f in files),
+        "files": len(result_files),
+        "bytes": sum(f["size"] for f in result_files),
         "local_files": len(local),
         "ok": ok,
         "missing": missing,

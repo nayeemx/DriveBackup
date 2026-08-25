@@ -10,13 +10,66 @@ App: backup / verify / wipe files on your own Google Drive; per-file selection,
 disconnect account, AI analysis report (OpenRouter key optional).
 
 ## Current state (last session ended)
-- **Latest released version: v0.1.28** — live on GitHub
-  https://github.com/nayeemx/DriveBackup/releases/tag/v0.1.28
-  (DriveBackup-Setup-0.1.28.exe, 53.9 MB, state=uploaded).
-- v0.1.28 is **installed** on this machine (`%LOCALAPPDATA%\DriveBackup`, version.txt = 0.1.28)
-  and app was verified running on port 8085 (HTTP 200). App may not be running now.
-- v0.1.27 release also live; v0.1.25 asset confirmed uploaded (earlier timeout was a false alarm).
+- **Latest released version: v0.1.34** — live on GitHub
+  https://github.com/nayeemx/DriveBackup/releases/tag/v0.1.34
+- v0.1.34 fixes verify hash mismatch, Google Photos remote detection, and adds
+  gphotosdl proxy support for original quality Google Photos downloads.
+- v0.1.33 fixes the in-app updater end-to-end (PROBLEMS.md #14).
+- **Installed app on this machine: v0.1.33** (will be upgraded by end-to-end verification).
 - Repo is PUBLIC — other people can download and install the app.
+
+## Session work (v0.1.34 — DONE, RELEASED)
+- **Bug fix: Verify hash mismatch** (PROBLEMS.md #15):
+  `md5_of_file()` in `backup.py:23-31` was computing SHA-256 (64 hex chars)
+  instead of MD5 (32 hex chars). Local verify always reported "HASH MISMATCH"
+  for files with Drive MD5 hashes. Fixed by changing `hashlib.sha256()` to
+  `hashlib.md5()`.
+- **Bug fix: Google Photos remote_usable()** (PROBLEMS.md #16):
+  `remote_usable()` in `rclone_manager.py:211-226` checked for `"total"` in
+  `rclone about` output, but Google Photos returns `"Photos:"` / `"Videos:"`
+  without a `"Total:"` line. Fixed by accepting any of `"total"`, `"photos:"`,
+  or `"videos:"` keywords.
+- **Feature: gphotosdl proxy for original quality Google Photos** (PROBLEMS.md #17):
+  Google Photos API delivers compressed images by default. Added `--gphotos-proxy`
+  support via the gphotosdl headless browser proxy. Config key `gphotos_proxy`
+  in config.py, passed to rclone copy/check commands. Settings UI card added
+  with proxy URL input and link to gphotosdl setup instructions.
+
+### Files changed in v0.1.34
+- `app/engine/backup.py` — fixed `md5_of_file()` hash algorithm, added `gphotos_proxy` param
+- `app/engine/verify.py` — added `gphotos_proxy` param to `check_remote()`
+- `app/engine/rclone_manager.py` — fixed `remote_usable()`, added `gphotos_proxy` to `copy()`/`check()`
+- `app/utils/config.py` — added `gphotos_proxy` default
+- `app/gui/pages.py` — added Google Photos proxy settings card, passed proxy to backup/verify calls
+
+## Session work (v0.1.30 / v0.1.31 — DONE)
+- v0.1.30 built locally (dist/DriveBackup-Setup-0.1.30.exe, 39.8 MB) — NOT released separately:
+  - Auto Light/Dark theme (prefers-color-scheme, Google Material palette), see PROBLEMS.md #13.
+  - Google Photos integration (active_service in config.py, Dashboard selector, Wipe hard-block).
+- **v0.1.31 (RELEASED)**: fixed `ctx.config.get("remote")` -> `ctx.config.active_remote`
+  in ALL live call sites (pages.py lines 458/529/582/777/1196/1263). On fresh
+  installs `get("remote")` returned None and blocked Backup/Verify/Wipe after connecting.
+  `tabs.py` is DEAD legacy code (customtkinter, imported nowhere) — left untouched.
+
+## Session work (v0.1.32 / v0.1.33 — DONE, v0.1.33 RELEASED)
+- User's installed v0.1.29 failed to update: "PermissionError: WinError 32" + exit 5, then exit 1.
+  Full story + fix in PROBLEMS.md #14. Three stacked bugs:
+  1. Installer ran while app alive -> exit 5 (access denied replacing running exe).
+  2. Auto-check + manual check downloaded concurrently to the SAME %TEMP% file -> WinError 32.
+  3. v0.1.32's AppMutex directive FAILS FAST (exit 1, ~2 s) in silent mode whenever the app
+     holds the mutex - old app versions never exit on their own, so updates from <=0.1.31 were impossible.
+- **FINAL FIX (v0.1.33)**: installer.iss `InitializeSetup` waits up to 20 s for the app to
+  self-exit (new versions: <=6 s watchdog), then `taskkill /IM DriveBackup.exe /F /T` (old
+  versions). AppMutex kept only as last-resort guard. Plus the v0.1.32 changes kept: detached
+  installer launch, unique pid-suffixed temp file, concurrent-update guard, [Run] relaunch
+  (no skipifsilent).
+- **VERIFIED END-TO-END on this machine**: app running + v0.1.33 installer -> ~20 s wait ->
+  app force-closed -> clean install (exit 0, ~160 s) -> version 0.1.33 installed; app relaunch
+  verified on port 8085. Machine is now ON v0.1.33 (upgraded by the test itself).
+- v0.1.33 live at https://github.com/nayeemx/DriveBackup/releases/tag/v0.1.33
+- GOTCHA: manual `Setup.exe /VERYSILENT` with app open now waits <=20 s then AUTO-CLOSES the app.
+- Known transient: FIRST execution of a freshly built unsigned exe can fail once (Defender scan,
+  ~30 s) - PROBLEMS.md #10 precedent; next run is clean.
 
 ## What v0.1.28 added (installability on any Windows 10/11 64-bit machine)
 1. rclone.exe bundled inside installer (no first-run download, works offline);
@@ -63,14 +116,18 @@ disconnect account, AI analysis report (OpenRouter key optional).
 - rclone binary/config: `%APPDATA%\DriveBackup\tools\rclone.exe`, `rclone.conf` (preserved across installs).
 
 ## Open items / next steps
-1. **PipelineChips needs active_remote fix**: `widgets.py → PipelineChips.refresh()` still calls `ctx.config.get("remote")` on line ~175. Update to `ctx.config.active_remote` for consistency.
-2. **BackupPage and VerifyPage** also use `ctx.config.get("remote")` — review and update all occurrences to use `ctx.config.active_remote`.
-3. (Optional) Custom Google OAuth client_id support — rclone's shared client_id
+1. (Optional) Custom Google OAuth client_id support — rclone's shared client_id
    is being retired in 2026; add config keys + Settings fields + pass
    `drive_client_id`/`drive_client_secret` to `config create`.
-4. (Optional) Polish README.md with install instructions/screenshots for outside users.
-5. SmartScreen warning on first install (unsigned exe) — only fix is a paid code-signing cert.
-6. wipe_test.py hangs in dev env (test-env artifact, not an app bug).
+2. (Optional) Polish README.md with install instructions/screenshots for outside users.
+3. SmartScreen warning on first install (unsigned exe) — only fix is a paid code-signing cert.
+4. wipe_test.py hangs in dev env (test-env artifact, not an app bug).
+5. Optionally delete dead `app/gui/tabs.py` (customtkinter legacy, imported nowhere).
+6. Commit + push the v0.1.31..v0.1.33 changes (pages.py, updater.py, installer.iss,
+   HANDOFF.md, PROBLEMS.md) — repo is clean except these.
+7. (Optional) Test the IN-APP update flow once more when a newer release exists:
+   Settings -> Check for updates from the running v0.1.33 app (the installer-side
+   was verified; the app-side self-exit after launching the installer was code-reviewed).
 
 ## Gotchas
 - Never probe the app on port 8080 (wslrelay). Use netstat for the DriveBackup process listener.

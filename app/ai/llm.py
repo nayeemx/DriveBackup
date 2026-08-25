@@ -1,4 +1,6 @@
 import json
+import time
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
@@ -6,23 +8,24 @@ from ..utils.logging_utils import get_logger
 
 LOG = get_logger()
 
-MODEL = "gemini-2.5-flash"
-API = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-OPENROUTER_API = "https://openrouter.ai/api/v1/chat/completions"
-OPENROUTER_DEFAULT_MODEL = "openrouter/auto"
+MODEL: str = "gemini-2.5-flash"
+API: str = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+OPENROUTER_API: str = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_DEFAULT_MODEL: str = "openrouter/auto"
 
-BATCH_CATEGORIZE = 200
-BATCH_PLAN = 100
+BATCH_CATEGORIZE: int = 200
+BATCH_PLAN: int = 100
 
 
-def _ask(api_key, prompt, timeout=60, max_tokens=2000,
-         provider="gemini", model=None, json_mode=False):
+def _ask(api_key: str, prompt: str, timeout: int = 60, max_tokens: int = 2000,
+         provider: str = "gemini", model: Optional[str] = None,
+         json_mode: bool = False) -> str:
     if not api_key:
         raise RuntimeError("No API key configured (free Gemini key from "
                            "Google AI Studio, or an OpenRouter key - "
                            "no credit card needed for Gemini).")
     if provider == "openrouter":
-        payload = {
+        payload: dict[str, Any] = {
             "model": model or OPENROUTER_DEFAULT_MODEL,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": max_tokens,
@@ -30,7 +33,7 @@ def _ask(api_key, prompt, timeout=60, max_tokens=2000,
         }
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
-        headers = {
+        headers: dict[str, str] = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
@@ -47,7 +50,7 @@ def _ask(api_key, prompt, timeout=60, max_tokens=2000,
             else:
                 raise
         data = resp.json()
-        content = data["choices"][0]["message"].get("content")
+        content: Optional[str] = data["choices"][0]["message"].get("content")
         if not content:
             payload["max_tokens"] = max_tokens * 2
             resp = requests.post(OPENROUTER_API, headers=headers,
@@ -68,18 +71,41 @@ def _ask(api_key, prompt, timeout=60, max_tokens=2000,
     }
     if json_mode:
         payload["generationConfig"]["responseMimeType"] = "application/json"
-    resp = requests.post(
-        API.format(model=model or MODEL),
-        params={"key": api_key},
-        json=payload,
-        timeout=timeout,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+    headers = {"x-goog-api-key": api_key}
+    last_exc: Optional[Exception] = None
+    for attempt in range(3):
+        try:
+            resp = requests.post(
+                API.format(model=model or MODEL),
+                headers=headers,
+                json=payload,
+                timeout=timeout,
+            )
+            if resp.status_code == 429:
+                wait = min(2 ** attempt * 2, 30)
+                LOG.warning(f"Gemini rate limited, retrying in {wait}s (attempt {attempt + 1}/3)")
+                time.sleep(wait)
+                continue
+            resp.raise_for_status()
+            data = resp.json()
+            return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+        except requests.HTTPError as exc:
+            last_exc = exc
+            if resp.status_code >= 500:
+                wait = min(2 ** attempt, 10)
+                LOG.warning(f"Gemini server error {resp.status_code}, retrying in {wait}s")
+                time.sleep(wait)
+                continue
+            raise
+        except requests.ConnectionError:
+            wait = min(2 ** attempt, 10)
+            LOG.warning(f"Gemini connection error, retrying in {wait}s")
+            time.sleep(wait)
+            continue
+    raise RuntimeError(f"Gemini API failed after retries: {last_exc}")
 
 
-def _parse_json(text):
+def _parse_json(text: str) -> Any:
     text = text.strip()
     if text.startswith("```"):
         text = text.strip("`")
@@ -88,9 +114,9 @@ def _parse_json(text):
     return json.loads(text)
 
 
-def summarize(api_key: str, data: dict, timeout=60,
-              provider="gemini", model=None) -> str:
-    """Executive summary of the analysis. Returns markdown text."""
+def summarize(api_key: str, data: dict[str, Any], timeout: int = 60,
+              provider: str = "gemini",
+              model: Optional[str] = None) -> str:
     prompt = (
         "You are a data-hygiene assistant for someone whose Google Drive is "
         "full. Write a concise, friendly executive summary (max 250 words) of "
@@ -109,17 +135,13 @@ def summarize(api_key: str, data: dict, timeout=60,
     return text
 
 
-def ai_categorize(api_key: str, names, timeout=60,
-                  provider="gemini", model=None):
-    """Classify filenames the extension rules could not.
-
-    Returns {name: category} using only the known categories, or {} on
-    any failure (callers fall back to rule-based results).
-    """
+def ai_categorize(api_key: str, names: List[str], timeout: int = 60,
+                  provider: str = "gemini",
+                  model: Optional[str] = None) -> Dict[str, str]:
     if not names:
         return {}
     names = list(dict.fromkeys(str(n) for n in names))
-    result = {}
+    result: Dict[str, str] = {}
     cats = ", ".join(sorted(_CATEGORIES_JSON))
     for i in range(0, len(names), BATCH_CATEGORIZE):
         batch = names[i:i + BATCH_CATEGORIZE]
@@ -153,16 +175,12 @@ def ai_categorize(api_key: str, names, timeout=60,
     return result
 
 
-def ai_organization_plan(api_key: str, files, timeout=90,
-                         provider="gemini", model=None):
-    """AI-proposed target paths for an organization plan.
-
-    Returns {source: target} where target keeps the original extension.
-    Invalid entries are dropped (caller falls back to rules per file).
-    """
+def ai_organization_plan(api_key: str, files: List[dict[str, Any]],
+                         timeout: int = 90, provider: str = "gemini",
+                         model: Optional[str] = None) -> Dict[str, str]:
     if not files:
         return {}
-    result = {}
+    result: Dict[str, str] = {}
     for i in range(0, len(files), BATCH_PLAN):
         batch = files[i:i + BATCH_PLAN]
         sources = {str(f["source"]) for f in batch}
@@ -197,14 +215,11 @@ def ai_organization_plan(api_key: str, files, timeout=90,
     return result
 
 
-def ai_quality_check(api_key: str, analysis: dict, verify=None, timeout=60,
-                     provider="gemini", model=None):
-    """AI review of the drive health summary.
-
-    Returns a list of findings {"severity": high|medium|low, "message": str}.
-    Empty list on failure (never blocks the pipeline).
-    """
-    compact = {
+def ai_quality_check(api_key: str, analysis: dict[str, Any],
+                     verify: Optional[dict[str, Any]] = None,
+                     timeout: int = 60, provider: str = "gemini",
+                     model: Optional[str] = None) -> List[dict[str, str]]:
+    compact: dict[str, Any] = {
         "files": analysis.get("count", 0),
         "total_size_bytes": analysis.get("size", 0),
         "categories": {k: {"count": v["count"], "size": v["size"]}
@@ -247,7 +262,7 @@ def ai_quality_check(api_key: str, analysis: dict, verify=None, timeout=60,
         if not isinstance(parsed, list):
             LOG.warning("AI quality check returned non-list JSON")
             return []
-    findings = []
+    findings: List[dict[str, str]] = []
     for item in parsed:
         if (isinstance(item, dict) and item.get("severity") in
                 ("high", "medium", "low") and isinstance(item.get("message"), str)
@@ -257,7 +272,7 @@ def ai_quality_check(api_key: str, analysis: dict, verify=None, timeout=60,
     return findings
 
 
-_CATEGORIES_JSON = (
+_CATEGORIES_JSON: Tuple[str, ...] = (
     "Images", "Videos", "Audio", "Documents", "Spreadsheets",
     "Presentations", "Archives", "Code", "Installers", "3D & Design",
     "Other",

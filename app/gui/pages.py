@@ -1,5 +1,7 @@
 from contextlib import nullcontext
+import json as _json
 from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional
 
 from nicegui import ui
 
@@ -19,48 +21,59 @@ from ..utils.updater import check_for_update, install_update
 from ..utils.version import APP_VERSION
 
 
-def _fmt(n):
+def _fmt(n: Any) -> str:
     return f"{n:,}" if isinstance(n, int) else str(n)
 
 
-def apply_update(ctx, info):
+_UPDATE_JOB_RUNNING = False
+
+
+def apply_update(ctx: Any, info: Any) -> None:
     """Download, install and relaunch an update in a background job."""
 
-    def fn(hub):
+    def fn(hub: Any) -> bool:
         hub.log("INFO", f"Downloading {info.asset_name} ...")
         install_update(info, progress=lambda m: hub.log("INFO", m))
-        hub.log("SUCCESS", f"DriveBackup v{info.version} installed.")
+        hub.log("SUCCESS", f"Update v{info.version} staged - closing for install ...")
         return True
 
-    def on_done(result, error):
+    def on_done(result: Any, error: Optional[Exception]) -> None:
+        global _UPDATE_JOB_RUNNING
+        _UPDATE_JOB_RUNNING = False
         if error:
             ui.notify(f"Update failed: {error}", type="negative",
                       position="top-right")
             return
-        ui.notify("Update installed - restarting ...", type="positive",
-                  position="top-right")
+        ui.notify("Installing - the app will reopen on its own ...",
+                  type="positive", position="top-right")
         from nicegui import app as napp
         napp.shutdown()
 
+    global _UPDATE_JOB_RUNNING
+    if _UPDATE_JOB_RUNNING:
+        ui.notify("An update is already being installed.", type="warning",
+                  position="top-right")
+        return
+    _UPDATE_JOB_RUNNING = True
     ctx.start_job("update", fn, on_done=on_done)
 
 
 class DashboardPage:
-    def __init__(self, ctx, navigate):
+    def __init__(self, ctx: Any, navigate: Callable[[str], None]) -> None:
         self.ctx = ctx
         self.navigate = navigate
-        self.stats = {}
-        self.connect_btn = None
-        self.disconnect_btn = None
-        self.guide_icon = None
-        self.guide_title = None
-        self.guide_text = None
-        self.guide_btn = None
+        self.stats: Dict[str, Any] = {}
+        self.connect_btn: Optional[Any] = None
+        self.disconnect_btn: Optional[Any] = None
+        self.guide_icon: Optional[Any] = None
+        self.guide_title: Optional[Any] = None
+        self.guide_text: Optional[Any] = None
+        self.guide_btn: Optional[Any] = None
         self._guide_step = ""
-        self.service_select = None
-        self._photos_notice = None
+        self.service_select: Optional[Any] = None
+        self._photos_notice: Optional[Any] = None
 
-    def build(self, parent=None):
+    def build(self, parent: Optional[Any] = None) -> None:
         with parent or nullcontext():
             page_header(
                 "cloud_download",
@@ -126,7 +139,7 @@ class DashboardPage:
             self.refresh()
             self._refresh_connect_label()
 
-    def _guide_action(self):
+    def _guide_action(self) -> None:
         step = self._guide_step
         if step == "connect":
             self._connect()
@@ -134,24 +147,24 @@ class DashboardPage:
                       "Help", "Dashboard"):
             self.navigate(step)
 
-    def _step_to(self, step):
+    def _step_to(self, step: str) -> None:
         mapping = {"Connect": "Dashboard", "Backup": "Backup", "Verify": "Verify",
                    "Analyze": "Analyze", "Wipe": "Wipe"}
         self.navigate(mapping.get(step, "Dashboard"))
 
-    def _service_changed(self, e):
+    def _service_changed(self, e: Any) -> None:
         self.ctx.config.set("active_service", e.value)
         self._refresh_connect_label()
         self.refresh()
 
-    def _refresh_connect_label(self):
+    def _refresh_connect_label(self) -> None:
         if not self.connect_btn:
             return
         svc = self.ctx.config.get("active_service", "drive")
         label = "Connect Google Photos" if svc == "photos" else "Connect Google Drive"
         self.connect_btn.set_text(label)
 
-    def refresh(self):
+    def refresh(self) -> None:
         ctx = self.ctx
         remote = ctx.config.active_remote
         connected = ctx.manager.remote_exists(remote)
@@ -216,7 +229,7 @@ class DashboardPage:
             on_done=self._stats_done,
         )
 
-    def _stats_done(self, result, error):
+    def _stats_done(self, result: Any, error: Optional[Exception]) -> None:
         ctx = self.ctx
         ctx.finish_job("stats")
         if error:
@@ -235,7 +248,7 @@ class DashboardPage:
             self.stats["files"].set("0")
             self.stats["backed"].set("-")
 
-    def _guide(self, step, title, text, button_label):
+    def _guide(self, step: str, title: str, text: str, button_label: str) -> None:
         self._guide_step = step
         if self.guide_title:
             self.guide_title.set_text(title)
@@ -244,7 +257,7 @@ class DashboardPage:
         if self.guide_btn:
             self.guide_btn.set_text(button_label)
 
-    def _connect(self):
+    def _connect(self) -> None:
         ctx = self.ctx
         if self.connect_btn:
             self.connect_btn.disable()
@@ -259,12 +272,12 @@ class DashboardPage:
                 backend_type,
                 ctx.config.get("export_formats"),
                 auth_cb=lambda url, ce=None: hub.ask_auth_url(url, ce),
-                code_cb=lambda: hub.ask_code(),
+                code_cb=lambda ce=None: hub.ask_code(ce),
             ),
             on_done=self._connect_done,
         )
 
-    def _connect_done(self, result, error):
+    def _connect_done(self, result: Any, error: Optional[Exception]) -> None:
         from .widgets import connect_dialog_status
         self.ctx.finish_job("connect")
         svc = self.ctx.config.get("active_service", "drive")
@@ -282,7 +295,7 @@ class DashboardPage:
         ui.notify(f"{svc_label} connected", type="positive", position="top-right")
         self.refresh()
 
-    def _disconnect(self):
+    def _disconnect(self) -> None:
         confirm_dialog(
             "Disconnect Google Drive?",
             "This removes the connected Google account from the app.\n\n"
@@ -292,7 +305,7 @@ class DashboardPage:
             on_ok=self._disconnect_start,
         )
 
-    def _disconnect_start(self):
+    def _disconnect_start(self) -> None:
         ctx = self.ctx
         remote = ctx.config.active_remote
         if self.disconnect_btn:
@@ -304,7 +317,7 @@ class DashboardPage:
             on_done=self._disconnect_done,
         )
 
-    def _disconnect_done(self, result, error):
+    def _disconnect_done(self, result: Any, error: Optional[Exception]) -> None:
         ctx = self.ctx
         ctx.finish_job("disconnect")
         if error:
@@ -326,25 +339,25 @@ class DashboardPage:
 
 
 class BackupPage:
-    def __init__(self, ctx):
+    def __init__(self, ctx: Any) -> None:
         self.ctx = ctx
-        self.dir_input = None
-        self.start_btn = None
-        self.progress = None
-        self.progress_label = None
-        self.summary = None
+        self.dir_input: Optional[Any] = None
+        self.start_btn: Optional[Any] = None
+        self.progress: Optional[Any] = None
+        self.progress_label: Optional[Any] = None
+        self.summary: Optional[Any] = None
         self.running = False
-        self.scope_radio = None
-        self.folders_input = None
-        self.skip_input = None
-        self.files_input = None
-        self.pick_files = []
-        self.scope_summary = None
-        self.refresh_btn = None
-        self._listing_cb = None
-        self.picker = None
+        self.scope_radio: Optional[Any] = None
+        self.folders_input: Optional[Any] = None
+        self.skip_input: Optional[Any] = None
+        self.files_input: Optional[Any] = None
+        self.pick_files: List[str] = []
+        self.scope_summary: Optional[Any] = None
+        self.refresh_btn: Optional[Any] = None
+        self._listing_cb: Optional[Callable[[Any, Any], None]] = None
+        self.picker: Optional[Any] = None
 
-    def build(self, parent=None):
+    def build(self, parent: Optional[Any] = None) -> None:
         with parent or nullcontext():
             page_header(
                 "cloud_download",
@@ -425,10 +438,10 @@ class BackupPage:
             self.summary = ui.label("").classes("text-sm").style(f"color:{GOOD}")
             self._scope_changed()
 
-    def _scope_changed(self):
+    def _scope_changed(self) -> None:
         self._update_scope_summary()
 
-    def _open_picker(self):
+    def _open_picker(self) -> None:
         inv = bk.load_inventory()
         if self.picker is None:
             self.picker = FilePickerDialog(
@@ -444,22 +457,23 @@ class BackupPage:
                   position="top-right")
         self._start_listing(self._open_picker_with)
 
-    def _open_picker_with(self, result, error):
+    def _open_picker_with(self, result: Any, error: Optional[Exception]) -> None:
         if error or not result:
             return
         self.picker.open(result, on_confirm=self._files_picked)
 
-    def _picker_refresh(self, picker):
+    def _picker_refresh(self, picker: Any) -> None:
         self._start_listing(
             lambda result, error: picker.refresh_done(error, result))
 
-    def _start_listing(self, cb):
+    def _start_listing(self, cb: Optional[Callable[[Any, Any], None]]) -> None:
         ctx = self.ctx
-        remote = ctx.config.get("remote")
+        remote = ctx.config.active_remote
         if not ctx.manager.remote_exists(remote):
             ui.notify("Connect Google Drive first (Dashboard).",
                       type="warning")
-            cb(None, "Drive is not connected.")
+            if cb:
+                cb(None, "Drive is not connected.")
             return
         self._listing_cb = cb
         if self.refresh_btn:
@@ -470,7 +484,7 @@ class BackupPage:
             on_done=self._listing_done,
         )
 
-    def _listing_done(self, result, error):
+    def _listing_done(self, result: Any, error: Optional[Exception]) -> None:
         ctx = self.ctx
         ctx.finish_job("listing-backup")
         if self.refresh_btn:
@@ -482,7 +496,6 @@ class BackupPage:
             if cb:
                 cb(None, error)
             return
-        import json as _json
         bk.state_path("inventory.json").write_text(
             _json.dumps(result, indent=1), encoding="utf-8")
         ctx.hub.log("SUCCESS",
@@ -505,7 +518,7 @@ class BackupPage:
         if cb:
             cb(result, None)
 
-    def _files_picked(self, paths):
+    def _files_picked(self, paths: List[str]) -> None:
         self.pick_files = paths
         if paths:
             total = sum(f.get("Size", 0) for f in bk.load_inventory()
@@ -516,17 +529,17 @@ class BackupPage:
             self.files_input.set_text("No files selected yet")
         self._update_scope_summary()
 
-    def _refresh_listing(self):
+    def _refresh_listing(self) -> None:
         self._start_listing(None)
 
-    def _folder_lines(self, widget):
+    def _folder_lines(self, widget: Any) -> List[str]:
         return [ln.strip("/ ").strip() for ln in (widget.value or "").splitlines()
                 if ln.strip()]
 
-    def _update_scope_summary(self):
+    def _update_scope_summary(self) -> None:
         try:
             scope = self.scope_radio.value
-            remote = self.ctx.config.get("remote")
+            remote = self.ctx.config.active_remote
             if not self.ctx.manager.remote_exists(remote):
                 self.scope_summary.set_text(
                     "Connect Google Drive first (Dashboard) to see what will "
@@ -566,20 +579,20 @@ class BackupPage:
                 label = f"Everything in your Drive - {len(files)} files, " \
                         f"{format_bytes(sum(f.get('Size', 0) for f in files))}"
             self.scope_summary.set_text(f"Scope: {label}")
-        except Exception:
+        except (ValueError, KeyError, AttributeError):
             self.scope_summary.set_text("")
 
-    def _browse(self):
+    def _browse(self) -> None:
         path = pick_directory("Choose backup destination")
         if path:
             self.dir_input.value = path
 
-    def _run(self):
+    def _run(self) -> None:
         target = (self.dir_input.value or "").strip()
         if not target:
             ui.notify("Choose a destination folder first.", type="warning")
             return
-        remote = self.ctx.config.get("remote")
+        remote = self.ctx.config.active_remote
         if not self.ctx.manager.remote_exists(remote):
             ui.notify("Connect Google Drive first (Dashboard).", type="warning")
             return
@@ -612,20 +625,21 @@ class BackupPage:
                 include_folders=only or None,
                 exclude_folders=skip or None,
                 include_files=files or None,
+                gphotos_proxy=cfg.get("gphotos_proxy", ""),
             ),
             on_progress=self._on_progress,
             on_done=self._on_done,
         )
 
-    def _on_progress(self, pct, text):
+    def _on_progress(self, pct: Optional[float], text: str) -> None:
         if pct is not None and pct > 0:
             self.progress.props(remove="indeterminate")
-            self.progress.set_value(pct / 100)
-            self.progress_label.set_text(f"{pct}% - {text}")
+            self.progress.set_value(min(pct, 1.0))
+            self.progress_label.set_text(f"{pct * 100:.1f}% - {text}")
         else:
             self.progress_label.set_text(text)
 
-    def _on_done(self, result, error):
+    def _on_done(self, result: Any, error: Optional[Exception]) -> None:
         self.ctx.finish_job("backup")
         self.running = False
         self.start_btn.enable()
@@ -647,16 +661,16 @@ class BackupPage:
 
 
 class VerifyPage:
-    def __init__(self, ctx):
+    def __init__(self, ctx: Any) -> None:
         self.ctx = ctx
-        self.status = None
-        self.progress = None
-        self.table = None
-        self.verify_btn = None
-        self.deep_btn = None
+        self.status: Optional[Any] = None
+        self.progress: Optional[Any] = None
+        self.table: Optional[Any] = None
+        self.verify_btn: Optional[Any] = None
+        self.deep_btn: Optional[Any] = None
         self.deep = False
 
-    def build(self, parent=None):
+    def build(self, parent: Optional[Any] = None) -> None:
         with parent or nullcontext():
             page_header(
                 "fact_check",
@@ -704,7 +718,7 @@ class VerifyPage:
             self.table.props('flat bordered dense')
             self._show_status()
 
-    def _show_status(self):
+    def _show_status(self) -> None:
         data = vf.load_verify_result()
         if data:
             color = GOOD if data.get("passed") else DANGER
@@ -722,7 +736,7 @@ class VerifyPage:
                 self.freshness.set_text(
                     f"Result is {age:.1f} hours old - Wipe stays unlocked for "
                     f"another {left:.1f} hours (or re-verify anytime).")
-            except Exception:
+            except (ValueError, KeyError):
                 self.freshness.set_text(
                     f"Wipe window: {hours} hours after a passing verify.")
         else:
@@ -731,7 +745,7 @@ class VerifyPage:
             self.status.style(f"color: {MUTED}")
             self.freshness.set_text("")
 
-    def _verify(self):
+    def _verify(self) -> None:
         self.verify_btn.disable()
         self.verify_btn.set_text("Verifying ...")
         self.progress.props("indeterminate")
@@ -746,12 +760,12 @@ class VerifyPage:
             on_done=self._verify_done,
         )
 
-    def _on_progress(self, pct, text):
+    def _on_progress(self, pct: Optional[float], text: str) -> None:
         if pct and pct > 0:
             self.progress.props(remove="indeterminate")
-            self.progress.set_value(pct / 100)
+            self.progress.set_value(min(pct, 1.0))
 
-    def _verify_done(self, result, error):
+    def _verify_done(self, result: Any, error: Optional[Exception]) -> None:
         self.ctx.finish_job("verify")
         self.verify_btn.enable()
         self.verify_btn.set_text("Verify backup")
@@ -773,8 +787,8 @@ class VerifyPage:
             self.ctx.hub.log("ERROR", "Verification FAILED")
         self.ctx.notify_verify_done()
 
-    def _deep(self):
-        remote = self.ctx.config.get("remote")
+    def _deep(self) -> None:
+        remote = self.ctx.config.active_remote
         manifest = vf.load_manifest_for_verify()
         if not manifest:
             ui.notify("Run a backup first.", type="warning")
@@ -795,11 +809,12 @@ class VerifyPage:
                 checkers=int(cfg.get("checkers")),
                 download=True,
                 line_cb=lambda m: hub.log("INFO", m),
+                gphotos_proxy=cfg.get("gphotos_proxy", ""),
             ),
             on_done=self._deep_done,
         )
 
-    def _deep_done(self, result, error):
+    def _deep_done(self, result: Any, error: Optional[Exception]) -> None:
         self.ctx.finish_job("deepcheck")
         self.deep_btn.enable()
         self.deep_btn.set_text("Deep check (re-download)")
@@ -821,14 +836,14 @@ class VerifyPage:
 
 
 class AnalyzePage:
-    def __init__(self, ctx):
+    def __init__(self, ctx: Any) -> None:
         self.ctx = ctx
-        self.analysis = None
-        self.summary_line = None
-        self.cat_table = None
-        self.details = None
+        self.analysis: Optional[Any] = None
+        self.summary_line: Optional[Any] = None
+        self.cat_table: Optional[Any] = None
+        self.details: Optional[Any] = None
 
-    def build(self, parent=None):
+    def build(self, parent: Optional[Any] = None) -> None:
         with parent or nullcontext():
             page_header(
                 "analytics",
@@ -869,12 +884,12 @@ class AnalyzePage:
             self.cat_table.props("flat bordered dense")
             self.details = ui.markdown("").classes("w-full mt-2")
 
-    def _ai_settings(self):
+    def _ai_settings(self) -> tuple:
         return (self.ctx.config.get("gemini_api_key"),
                 self.ctx.config.get("ai_provider", "gemini"),
                 self.ctx.config.get("ai_model") or None)
 
-    def _analyze(self):
+    def _analyze(self) -> None:
         key, provider, model = self._ai_settings()
         self.ctx.start_job(
             "analyze",
@@ -883,7 +898,7 @@ class AnalyzePage:
             on_done=self._analyze_done,
         )
 
-    def _analyze_done(self, result, error):
+    def _analyze_done(self, result: Any, error: Optional[Exception]) -> None:
         self.ctx.finish_job("analyze")
         if error:
             ui.notify(f"Analysis failed: {error}", type="negative")
@@ -897,7 +912,7 @@ class AnalyzePage:
         ui.notify("Analysis complete", type="positive", position="top-right")
         self._render(result)
 
-    def _render(self, a):
+    def _render(self, a: Any) -> None:
         self.summary_line.set_text(
             f"{_fmt(a['count'])} files, {format_bytes(a['size'])} | "
             f"{a['dup_count']} duplicate groups | {format_bytes(a['junk_size'])} junk")
@@ -925,7 +940,7 @@ class AnalyzePage:
                 lines.append(f"- `{label}`: {p}")
         self.details.set_content("\n".join(lines))
 
-    def _report(self):
+    def _report(self) -> None:
         ctx = self.ctx
         if not self.analysis:
             ui.notify("Run analysis first (it will be included in the report).",
@@ -940,7 +955,7 @@ class AnalyzePage:
             on_done=self._report_done,
         )
 
-    def _report_done(self, result, error):
+    def _report_done(self, result: Any, error: Optional[Exception]) -> None:
         self.ctx.finish_job("report")
         if error:
             ui.notify(f"Report failed: {error}", type="negative")
@@ -948,7 +963,7 @@ class AnalyzePage:
         ui.notify(f"Report saved: {result}", type="positive", position="top-right",
                   multi_line=True)
 
-    def _ai(self):
+    def _ai(self) -> None:
         key, provider, model = self._ai_settings()
         if not key:
             ui.notify("No AI key. Get a FREE Gemini key (no credit card) at "
@@ -966,7 +981,7 @@ class AnalyzePage:
             on_done=self._ai_done,
         )
 
-    def _ai_done(self, result, error):
+    def _ai_done(self, result: Any, error: Optional[Exception]) -> None:
         self.ctx.finish_job("ai")
         if error:
             ui.notify(f"AI summary failed: {error}", type="negative")
@@ -974,7 +989,7 @@ class AnalyzePage:
         self.details.set_content(f"## AI Summary\n\n{result}")
         ui.notify("AI summary ready", type="positive", position="top-right")
 
-    def _quality(self):
+    def _quality(self) -> None:
         ctx = self.ctx
         key, provider, model = self._ai_settings()
         if not key:
@@ -994,7 +1009,7 @@ class AnalyzePage:
             on_done=self._quality_done,
         )
 
-    def _quality_done(self, result, error):
+    def _quality_done(self, result: Any, error: Optional[Exception]) -> None:
         self.ctx.finish_job("ai")
         if error:
             ui.notify(f"AI quality check failed: {error}", type="negative")
@@ -1012,11 +1027,11 @@ class AnalyzePage:
         ui.notify(f"{len(result)} findings", type="warning", position="top-right")
 
 
-def _write_report(ctx, verify, analysis, gemini_key="",
-                  provider="gemini", model=None):
+def _write_report(ctx: Any, verify: Any, analysis: Any, gemini_key: str = "",
+                  provider: str = "gemini", model: Optional[str] = None) -> str:
     plan = ai_analyzer.organization_plan(gemini_key, provider=provider,
                                          model=model)
-    findings = []
+    findings: List[Any] = []
     if gemini_key:
         findings = ai_analyzer.quality_check(gemini_key, analysis, verify,
                                              provider=provider, model=model)
@@ -1028,22 +1043,22 @@ def _write_report(ctx, verify, analysis, gemini_key="",
 
 
 class WipePage:
-    def __init__(self, ctx):
+    def __init__(self, ctx: Any) -> None:
         self.ctx = ctx
-        self.gate = None
-        self.phrase = None
-        self.checkbox = None
-        self.trash_btn = None
-        self.empty_btn = None
-        self.purge_btn = None
-        self.inv_table = None
-        self.inv_summary = None
-        self.wipe_files = []
-        self.wipe_scope_label = None
-        self.picker = None
-        self._listing_cb = None
+        self.gate: Optional[Any] = None
+        self.phrase: Optional[Any] = None
+        self.checkbox: Optional[Any] = None
+        self.trash_btn: Optional[Any] = None
+        self.empty_btn: Optional[Any] = None
+        self.purge_btn: Optional[Any] = None
+        self.inv_table: Optional[Any] = None
+        self.inv_summary: Optional[Any] = None
+        self.wipe_files: List[str] = []
+        self.wipe_scope_label: Optional[Any] = None
+        self.picker: Optional[Any] = None
+        self._listing_cb: Optional[Callable[[Any, Any], None]] = None
 
-    def build(self, parent=None):
+    def build(self, parent: Optional[Any] = None) -> None:
         with parent or nullcontext():
             page_header(
                 "delete_forever",
@@ -1138,7 +1153,7 @@ class WipePage:
             self.wipe_scope_label.set_text(
                 "Wipe scope: ALL files on your Google Drive (default).")
 
-    def _show_inventory(self):
+    def _show_inventory(self) -> None:
         inv = bk.load_inventory()
         if not inv:
             ui.notify("No Drive listing yet - run a Backup first "
@@ -1166,7 +1181,7 @@ class WipePage:
                 "files 'Move to Trash' will delete from your Drive.")
         ui.notify(f"{len(rows)} files in scope", type="info", position="top-right")
 
-    def _pick_files(self):
+    def _pick_files(self) -> None:
         inv = bk.load_inventory()
         if self.picker is None:
             self.picker = FilePickerDialog(
@@ -1182,22 +1197,23 @@ class WipePage:
                   position="top-right")
         self._start_listing(self._open_picker_with)
 
-    def _open_picker_with(self, result, error):
+    def _open_picker_with(self, result: Any, error: Optional[Exception]) -> None:
         if error or not result:
             return
         self.picker.open(result, on_confirm=self._files_picked)
 
-    def _picker_refresh(self, picker):
+    def _picker_refresh(self, picker: Any) -> None:
         self._start_listing(
             lambda result, error: picker.refresh_done(error, result))
 
-    def _start_listing(self, cb):
+    def _start_listing(self, cb: Optional[Callable[[Any, Any], None]]) -> None:
         ctx = self.ctx
-        remote = ctx.config.get("remote")
+        remote = ctx.config.active_remote
         if not ctx.manager.remote_exists(remote):
             ui.notify("Connect Google Drive first (Dashboard).",
                       type="warning")
-            cb(None, "Drive is not connected.")
+            if cb:
+                cb(None, "Drive is not connected.")
             return
         self._listing_cb = cb
         ctx.start_job(
@@ -1206,7 +1222,7 @@ class WipePage:
             on_done=self._listing_done,
         )
 
-    def _listing_done(self, result, error):
+    def _listing_done(self, result: Any, error: Optional[Exception]) -> None:
         ctx = self.ctx
         ctx.finish_job("listing-wipe")
         cb, self._listing_cb = self._listing_cb, None
@@ -1216,7 +1232,6 @@ class WipePage:
             if cb:
                 cb(None, error)
             return
-        import json as _json
         bk.state_path("inventory.json").write_text(
             _json.dumps(result, indent=1), encoding="utf-8")
         ctx.hub.log("SUCCESS",
@@ -1224,7 +1239,7 @@ class WipePage:
         if cb:
             cb(result, None)
 
-    def _files_picked(self, paths):
+    def _files_picked(self, paths: List[str]) -> None:
         self.wipe_files = paths
         if paths:
             inv = bk.load_inventory()
@@ -1238,14 +1253,14 @@ class WipePage:
             self.wipe_scope_label.set_text(
                 "Wipe scope: ALL files on your Google Drive (default).")
 
-    def _update_gate(self):
+    def _update_gate(self) -> None:
         ok, msg = vf.verify_fresh(hours=self.ctx.config.get("verify_freshness_hours", 24))
         color = GOOD if ok else DANGER
         self.gate.set_text(f"Safety gate: {msg}")
         self.gate.style(f"color: {color}")
         self._update_buttons()
 
-    def _update_buttons(self):
+    def _update_buttons(self) -> None:
         phrase_ok = (self.phrase.value or "").strip().upper() == "DELETE ALL"
         enabled = bool(self.checkbox.value) and phrase_ok
         for b in (self.trash_btn, self.empty_btn, self.purge_btn):
@@ -1254,27 +1269,27 @@ class WipePage:
             else:
                 b.disable()
 
-    def _gate_check(self):
+    def _gate_check(self) -> str:
         cfg = self.ctx.config
         wp.require_fresh_verification(cfg)
         wp.require_confirmation(self.phrase.value or "")
         if not self.checkbox.value:
             raise wp.SafetyGateError("You must tick the verification checkbox.")
-        remote = cfg.get("remote")
+        remote = cfg.active_remote
         if not self.ctx.manager.remote_exists(remote):
             raise wp.SafetyGateError("Drive remote is not connected.")
         return remote
 
-    def _trash(self):
+    def _trash(self) -> None:
         self._run("trash")
 
-    def _empty(self):
+    def _empty(self) -> None:
         self._run("emptytrash")
 
-    def _purge(self):
+    def _purge(self) -> None:
         self._run("purge")
 
-    def _run(self, action):
+    def _run(self, action: str) -> None:
         try:
             remote = self._gate_check()
         except wp.SafetyGateError as exc:
@@ -1300,7 +1315,7 @@ class WipePage:
             on_ok=lambda: self._start(action, remote),
         )
 
-    def _start(self, action, remote):
+    def _start(self, action: str, remote: str) -> None:
         jobs = {
             "trash": wp.move_to_trash,
             "emptytrash": wp.empty_trash,
@@ -1315,8 +1330,8 @@ class WipePage:
             on_done=self._done(action),
         )
 
-    def _done(self, action):
-        def handler(result, error):
+    def _done(self, action: str) -> Callable[[Any, Optional[Exception]], None]:
+        def handler(result: Any, error: Optional[Exception]) -> None:
             self.ctx.finish_job(action)
             if error:
                 ui.notify(f"Wipe step failed: {error}", type="negative",
@@ -1327,17 +1342,17 @@ class WipePage:
 
 
 class SettingsPage:
-    def __init__(self, ctx):
+    def __init__(self, ctx: Any) -> None:
         self.ctx = ctx
-        self.transfers = None
-        self.checkers = None
-        self.hours = None
-        self.gemini = None
-        self.github_owner = None
-        self.github_repo = None
-        self.check_btn = None
+        self.transfers: Optional[Any] = None
+        self.checkers: Optional[Any] = None
+        self.hours: Optional[Any] = None
+        self.gemini: Optional[Any] = None
+        self.github_owner: Optional[Any] = None
+        self.github_repo: Optional[Any] = None
+        self.check_btn: Optional[Any] = None
 
-    def build(self, parent=None):
+    def build(self, parent: Optional[Any] = None) -> None:
         with parent or nullcontext():
             page_header("settings", "Settings",
                         "Tune the engine, add your AI key, and manage updates.")
@@ -1383,6 +1398,23 @@ class SettingsPage:
                     .props("color=primary no-caps").classes("mt-3")
 
             with ui.card().classes("w-full max-w-xl").props("flat bordered"):
+                ui.label("Google Photos").classes("text-[10px] font-semibold uppercase "
+                                                  "tracking-[0.16em]") \
+                    .style(f"color:{MUTED}")
+                ui.label("Google Photos API delivers compressed images by default. "
+                         "To download original quality, run the gphotosdl proxy "
+                         "alongside rclone.").classes("text-sm").style(f"color:{MUTED}")
+                self.gphotos_proxy = ui.input(
+                    "gphotosdl proxy URL (blank = use Google API defaults)",
+                    value=self.ctx.config.get("gphotos_proxy", ""),
+                    placeholder="http://localhost:8282")\
+                    .props("outlined dense").classes("w-full mt-2")
+                with ui.row().classes("w-full items-center gap-4 mt-1"):
+                    ui.link("gphotosdl setup instructions",
+                            "https://github.com/rclone/gphotosdl",
+                            new_tab=True).classes("text-xs")
+
+            with ui.card().classes("w-full max-w-xl").props("flat bordered"):
                 ui.label("Updates").classes("text-[10px] font-semibold uppercase "
                                             "tracking-[0.16em]") \
                     .style(f"color:{MUTED}")
@@ -1421,7 +1453,7 @@ class SettingsPage:
                     .style(f"color:{MUTED}")
                 try:
                     version = self.ctx.manager.version()
-                except Exception:
+                except (OSError, FileNotFoundError, AttributeError):
                     version = "not installed"
                 ui.label(f"rclone engine: {version}").classes("text-sm")
                 ui.label(f"State folder: {state_path('')}").classes(
@@ -1430,7 +1462,7 @@ class SettingsPage:
                           on_click=lambda: open_in_explorer(str(state_path(""))))\
                     .props("outline no-caps").classes("mt-2")
 
-    def _run_update_check(self):
+    def _run_update_check(self) -> None:
         owner = (self.github_owner.value or "").strip()
         repo = (self.github_repo.value or "").strip()
         if not owner or not repo:
@@ -1442,7 +1474,7 @@ class SettingsPage:
         cfg.set("github_repo", repo)
         self.check_btn.disable()
 
-        def fn(hub):
+        def fn(hub: Any) -> Any:
             hub.log("INFO", f"Checking for updates from {owner}/{repo} ...")
             info, err = check_for_update(owner, repo)
             if err:
@@ -1459,7 +1491,7 @@ class SettingsPage:
         self.ctx.start_job("update-check", fn,
                            on_done=lambda r, e: self._on_update_check(r, e))
 
-    def _on_update_check(self, result, error):
+    def _on_update_check(self, result: Any, error: Optional[Exception]) -> None:
         self.check_btn.enable()
         if error:
             ui.notify(f"Update check failed: {error}", type="negative",
@@ -1478,7 +1510,7 @@ class SettingsPage:
             on_ok=lambda: apply_update(self.ctx, info),
         )
 
-    def _save(self):
+    def _save(self) -> None:
         cfg = self.ctx.config
         try:
             cfg.set("transfers", max(1, min(16, int(self.transfers.value))))
@@ -1494,15 +1526,16 @@ class SettingsPage:
         cfg.set("ai_model", (self.model.value or "").strip())
         cfg.set("auto_update",
                 (self.auto_update.value or "prompt").strip())
+        cfg.set("gphotos_proxy", (self.gphotos_proxy.value or "").strip())
         self.ctx.hub.log("SUCCESS", "Settings saved.")
         ui.notify("Settings saved", type="positive", position="top-right")
 
 
 class HelpPage:
-    def __init__(self, ctx):
+    def __init__(self, ctx: Any) -> None:
         self.ctx = ctx
 
-    def build(self, parent=None):
+    def build(self, parent: Optional[Any] = None) -> None:
         with parent or nullcontext():
             page_header("help", "Help & Guide",
                         "Everything you need to master DriveBackup, visually explained.")
@@ -1553,5 +1586,5 @@ Knowing where your data lives is key to staying organized.
 - **Connection failing?** Sign out of Google in your browser and try again.
 - **Folder must be empty?** DriveBackup refuses to mix backups to prevent data corruption. Select a brand new folder.
 - **Verify keeps failing?** Delete the specific failing file locally and re-run Backup. It will seamlessly resume and fix the manifest.
-- **Still stuck?** Check the logs in `%APPDATA%\\DriveBackup\\logs` for detailed technical traces.
+- **Still stuck?** Check the log at `%APPDATA%\\DriveBackup\\app.log` for detailed technical traces.
 ''').classes("w-full")

@@ -9,7 +9,7 @@ os.environ["APPDATA"] = str(Path(tempfile.mkdtemp()) / "AppData")
 
 from nicegui import app, ui
 
-from app.gui.app import build, poll
+from app.gui.app import build, poll, pick_port
 from app.gui.context import AppContext
 
 CTX = AppContext()
@@ -56,7 +56,7 @@ def check_console():
         print("JOB REGISTRY OK")
 
 
-ui.run(title="DriveBackup GUI test", dark=True, host="127.0.0.1", port=8085,
+ui.run(title="DriveBackup GUI test", dark=True, host="127.0.0.1", port=pick_port(),
        reload=False, native=True, window_size=(1100, 780),
        uvicorn_logging_level="warning")
 if ERRORS:

@@ -1,4 +1,5 @@
 import html as _html
+from typing import Any, Callable, Dict, List, Optional
 
 from nicegui import ui
 
@@ -14,7 +15,7 @@ WARN = "var(--warn)"
 INFO = "var(--info)"
 MUTED = "var(--muted)"
 
-LEVEL_COLORS = {
+LEVEL_COLORS: Dict[str, str] = {
     "INFO": INFO,
     "DEBUG": "var(--muted)",
     "WARNING": WARN,
@@ -22,11 +23,11 @@ LEVEL_COLORS = {
     "SUCCESS": GOOD,
 }
 
-PIPELINE_STEPS = ["Connect", "Backup", "Verify", "Analyze", "Wipe"]
+PIPELINE_STEPS: List[str] = ["Connect", "Backup", "Verify", "Analyze", "Wipe"]
 
 
-def page_header(icon, title, subtitle=None):
-    """Consistent page hero: icon + title + optional subtitle."""
+def page_header(icon: str, title: str,
+                subtitle: Optional[str] = None) -> None:
     with ui.row().classes("w-full items-start gap-3 mb-4"):
         with ui.element("div").classes(
                 "w-10 h-10 rounded-lg flex items-center justify-center shrink-0") \
@@ -40,8 +41,8 @@ def page_header(icon, title, subtitle=None):
                     f"color:{MUTED}")
 
 
-def info_card(icon, title, lines, tone="info"):
-    """Compact 'what this page does' card: icon, title and bullet lines."""
+def info_card(icon: str, title: str, lines: List[str],
+              tone: str = "info") -> None:
     accent = {"info": INFO, "good": GOOD, "warn": WARN, "danger": DANGER}\
         .get(tone, INFO)
     with ui.card().props("flat bordered").classes("w-full p-3").style(
@@ -59,10 +60,10 @@ def info_card(icon, title, lines, tone="info"):
 class LogConsole:
     """Live, color-coded, auto-scrolling log console."""
 
-    def __init__(self, max_lines=500, height="200px"):
+    def __init__(self, max_lines: int = 500, height: str = "200px") -> None:
         self.max_lines = max_lines
         self._count = 0
-        self._items = []
+        self._items: list[Any] = []
         with ui.row().classes("w-full items-center gap-2 px-3 pt-1"):
             ui.icon("terminal").classes("text-sm").style(f"color:{MUTED}")
             ui.label("CONSOLE").classes("text-[10px] font-semibold "
@@ -78,7 +79,7 @@ class LogConsole:
             self.col = ui.column().classes("w-full gap-0 px-3 py-1")
         self.clear()
 
-    def push(self, message, level="INFO"):
+    def push(self, message: str, level: str = "INFO") -> None:
         color = LEVEL_COLORS.get(level, "#CBD5E1")
         tag = {"ERROR": "ERROR", "WARNING": "WARN", "SUCCESS": "OK"}\
             .get(level, level)
@@ -94,10 +95,10 @@ class LogConsole:
             oldest.delete()
         try:
             self.scroll.scroll_to(percent=1.0)
-        except Exception:
+        except (AttributeError, ValueError):
             pass
 
-    def clear(self):
+    def clear(self) -> None:
         self._items = []
         self._count = 0
         self.col.clear()
@@ -106,7 +107,8 @@ class LogConsole:
 class StatCard:
     """Flat stat card: tinted icon tile, uppercase label, bold value."""
 
-    def __init__(self, label, value="-", icon="info", color=ACCENT):
+    def __init__(self, label: str, value: str = "-", icon: str = "info",
+                 color: str = ACCENT) -> None:
         self.icon = icon
         self.color = color
         with ui.card().props("flat bordered").classes("w-full p-3 hover-lift"):
@@ -123,31 +125,32 @@ class StatCard:
                     self.value_el = ui.label(value).classes(
                         "text-xl font-semibold tracking-tight truncate")
 
-    def set(self, value, color=None):
+    def set(self, value: Any, color: Optional[str] = None) -> None:
         self.value_el.set_text(str(value))
         if color:
             self.value_el.style(f"color: {color}")
 
 
-def _rgb(hex_color, alpha="0.12"):
-    pass
-
-
-def chip(text, color="grey", icon=None):
-    c = ui.chip(text, icon=icon)
-    c.props(f"color={color} text-color=white")
-    return c
+def _rgb(hex_color: str, alpha: str = "0.12") -> str:
+    h = hex_color.lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    if len(h) != 6:
+        return f"0,0,0,{alpha}"
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"{r},{g},{b},{alpha}"
 
 
 class PipelineChips:
     """Visual progress of the 5-step journey (flat segmented pills)."""
 
-    def __init__(self, ctx, on_navigate=None):
+    def __init__(self, ctx: Any,
+                 on_navigate: Optional[Callable[[str], None]] = None) -> None:
         self.ctx = ctx
         self.on_navigate = on_navigate
-        self.states = {s: "pending" for s in PIPELINE_STEPS}
-        self.elements = {}
-        self._applied = {}
+        self.states: Dict[str, str] = {s: "pending" for s in PIPELINE_STEPS}
+        self.elements: Dict[str, Any] = {}
+        self._applied: Dict[str, str] = {}
         with ui.row().classes("items-center gap-2 flex-wrap"):
             for step in PIPELINE_STEPS:
                 b = ui.button(step, on_click=lambda s=step: self._go(s))
@@ -157,19 +160,19 @@ class PipelineChips:
                 self._applied[step] = ""
         self.refresh()
 
-    def _go(self, step):
+    def _go(self, step: str) -> None:
         if self.on_navigate:
             self.on_navigate(step)
 
-    def _color(self, state):
+    def _color(self, state: str) -> str:
         return {"done": "teal", "active": "primary",
                 "blocked": "red-8", "pending": "grey-8"}[state]
 
-    def set_state(self, step, state):
+    def set_state(self, step: str, state: str) -> None:
         if step in self.states:
             self.states[step] = state
 
-    def refresh(self):
+    def refresh(self) -> None:
         connected = self.ctx.manager.remote_exists(self.ctx.config.active_remote)
         verify_ok = self._verify_ok()
         for step in PIPELINE_STEPS:
@@ -193,34 +196,38 @@ class PipelineChips:
             b.props(remove=self._applied[step], add=new)
             self._applied[step] = new
 
-    def _manifest_exists(self):
+    def _manifest_exists(self) -> bool:
         from ..engine import backup as bk
-        return bk.load_manifest() is not None
+        manifest = bk.load_manifest()
+        return bool(manifest and manifest.get("files"))
 
-    def _verify_ok(self):
+    def _verify_ok(self) -> bool:
         from ..engine import verify as vf
         data = vf.load_verify_result()
         return bool(data and data.get("passed"))
 
-    def _analysis_exists(self):
+    def _analysis_exists(self) -> bool:
         from ..engine import backup as bk
-        return bk.load_inventory() is not None or bk.load_manifest() is not None
+        inv = bk.load_inventory()
+        return bool(inv) or bool(bk.load_manifest())
 
 
-def confirm_dialog(title, message, ok_label="Continue", danger=False,
-                   on_ok=None, on_cancel=None):
+def confirm_dialog(title: str, message: str, ok_label: str = "Continue",
+                   danger: bool = False,
+                   on_ok: Optional[Callable[[], None]] = None,
+                   on_cancel: Optional[Callable[[], None]] = None) -> Any:
     dlg = ui.dialog()
     color = "negative" if danger else "primary"
     with dlg, ui.card().classes("w-[26rem] max-w-[90vw] p-4"):
         ui.label(title).classes("text-lg font-semibold")
         ui.label(message).classes("text-sm").style(f"color:{MUTED}")
         with ui.row().classes("w-full justify-end gap-2 mt-4"):
-            def cancel():
+            def cancel() -> None:
                 dlg.close()
                 if on_cancel:
                     on_cancel()
 
-            def ok():
+            def ok() -> None:
                 dlg.close()
                 if on_ok:
                     on_ok()
@@ -241,22 +248,24 @@ class FilePickerDialog:
     when you hit 'Clear selection' or confirm with 'Use selected files'.
     """
 
-    def __init__(self, title="Select files", subtitle=None, on_refresh=None):
+    def __init__(self, title: str = "Select files",
+                 subtitle: Optional[str] = None,
+                 on_refresh: Optional[Callable[..., None]] = None) -> None:
         self.title = title
         self.subtitle = subtitle
         self.on_refresh = on_refresh
-        self.dialog = None
-        self.table = None
-        self.search = None
-        self.refresh_btn = None
-        self.count_label = None
-        self.count_badge = None
-        self._rows = []
-        self._inventory = []
-        self._selected_paths = []
-        self.on_confirm = None
+        self.dialog: Optional[Any] = None
+        self.table: Optional[Any] = None
+        self.search: Optional[Any] = None
+        self.refresh_btn: Optional[Any] = None
+        self.count_label: Optional[Any] = None
+        self.count_badge: Optional[Any] = None
+        self._rows: List[dict[str, Any]] = []
+        self._inventory: List[dict[str, Any]] = []
+        self._selected_paths: List[str] = []
+        self.on_confirm: Optional[Callable[[List[str]], None]] = None
 
-    def _build(self):
+    def _build(self) -> None:
         self.dialog = ui.dialog()
         with self.dialog, ui.card().classes(
                 "w-[56rem] max-w-[96vw] h-[76vh] flex flex-col gap-0 "
@@ -318,7 +327,7 @@ class FilePickerDialog:
                               on_click=self._confirm)\
                         .props("color=primary no-caps")
 
-    def _apply_filter(self):
+    def _apply_filter(self) -> None:
         q = (self.search.value or "").strip().lower()
         if q:
             rows = [r for r in self._rows
@@ -328,7 +337,7 @@ class FilePickerDialog:
         self.table.update_rows(rows)
         self._sync_count()
 
-    def _refresh(self):
+    def _refresh(self) -> None:
         if not self.on_refresh:
             return
         if self.refresh_btn:
@@ -337,8 +346,8 @@ class FilePickerDialog:
             self.count_label.set_text("Refreshing from Drive ...")
         self.on_refresh(self)
 
-    def refresh_done(self, error=None, inventory=None):
-        """Called by the page after the Drive listing job finished."""
+    def refresh_done(self, error: Optional[str] = None,
+                     inventory: Optional[List[dict[str, Any]]] = None) -> None:
         if self.refresh_btn:
             self.refresh_btn.enable()
         if error:
@@ -349,19 +358,19 @@ class FilePickerDialog:
         if inventory is not None:
             self.update_inventory(inventory)
 
-    def _all(self):
+    def _all(self) -> None:
         self.table.selected = list(self.table.rows)
         self._sync_count()
 
-    def _clear(self):
+    def _clear(self) -> None:
         self.table.selected = []
         self._selected_paths = []
         self._sync_count()
 
-    def _on_select(self, event):
+    def _on_select(self, event: Any) -> None:
         self._sync_count()
 
-    def _sync_count(self):
+    def _sync_count(self) -> None:
         n = len(self.table.selected)
         total = sum(r.get("_size", 0) for r in self.table.selected)
         if self.count_badge:
@@ -371,22 +380,18 @@ class FilePickerDialog:
                 f"{n} of {len(self._inventory)} files on your Drive selected"
                 + (f"  ({_human_size(total)})" if total else ""))
 
-    def _confirm(self):
+    def _confirm(self) -> None:
         paths = [r["path"] for r in self.table.selected]
         self._selected_paths = list(paths)
         self.dialog.close()
         if self.on_confirm:
             self.on_confirm(paths)
 
-    def _cancel(self):
+    def _cancel(self) -> None:
         self.dialog.close()
 
-    def open(self, inventory, on_confirm):
-        """Show the picker for the given inventory list (lsjson items).
-
-        Keeps the previous selection across close/reopen so nothing is
-        lost if the dialog is dismissed by accident.
-        """
+    def open(self, inventory: List[dict[str, Any]],
+             on_confirm: Callable[[List[str]], None]) -> None:
         if self.dialog is None:
             self._build()
         self._inventory = inventory
@@ -412,8 +417,7 @@ class FilePickerDialog:
         self._sync_count()
         self.dialog.open()
 
-    def update_inventory(self, inventory):
-        """Refresh the table in place (keeps selection if paths still exist)."""
+    def update_inventory(self, inventory: List[dict[str, Any]]) -> None:
         if self.dialog is None:
             return
         kept = {r["path"] for r in self.table.selected}
@@ -424,7 +428,7 @@ class FilePickerDialog:
         self._sync_count()
 
 
-def _human_size(n):
+def _human_size(n: int) -> str:
     if n < 1024:
         return f"{n} B"
     for unit in ("KB", "MB", "GB", "TB"):
@@ -434,15 +438,57 @@ def _human_size(n):
     return f"{n:.1f} PB"
 
 
-def auth_url_dialog(url, on_cancel=None):
-    """Connect-flow dialog with live status so the user always knows what
-    is happening: copy URL -> open browser -> sign in -> this dialog flips
-    to 'connected' automatically and closes itself."""
-    global _CONNECT_DIALOG
+class _DialogManager:
+    """Thread-safe singleton for managing the connect dialog state."""
+
+    def __init__(self) -> None:
+        self._state: Optional[Dict[str, Any]] = None
+
+    def set(self, dialog: Any, status: Any, spinner: Any, row: Any) -> None:
+        self._state = {"dialog": dialog, "status": status,
+                       "spinner": spinner, "row": row}
+
+    def close(self) -> None:
+        if self._state:
+            try:
+                self._state["dialog"].close()
+            except (AttributeError, ValueError):
+                pass
+            self._state = None
+
+    def update_status(self, message: str, ok: bool = False) -> None:
+        if not self._state:
+            return
+        entry = self._state
+        try:
+            if ok:
+                entry["spinner"].delete()
+                entry["row"].style(
+                    f"background:rgba(34,197,94,0.08);"
+                    f"border:1px solid rgba(34,197,94,.35)")
+                entry["status"].set_text(message)
+                entry["status"].style(f"color:{GOOD}")
+                ui.timer(1.4, self.close, once=True)
+            else:
+                entry["spinner"].delete()
+                entry["row"].style(
+                    f"background:rgba(248,113,113,0.08);"
+                    f"border:1px solid rgba(248,113,113,.35)")
+                entry["status"].set_text(message)
+                entry["status"].style(f"color:{DANGER}")
+        except (AttributeError, ValueError):
+            self._state = None
+
+
+_dialog_mgr = _DialogManager()
+
+
+def auth_url_dialog(url: str,
+                    on_cancel: Optional[Callable[[], None]] = None) -> Any:
     dlg = ui.dialog()
 
-    def cancel():
-        _close_connect_dialog()
+    def cancel() -> None:
+        _dialog_mgr.close()
         if on_cancel:
             on_cancel()
 
@@ -491,55 +537,27 @@ def auth_url_dialog(url, on_cancel=None):
                               "your browser ...").classes("text-sm")
             status.style(f"color:{INFO}")
     dlg.open()
-    _CONNECT_DIALOG = {"dialog": dlg, "status": status, "spinner": spinner,
-                       "row": status_row}
+    _dialog_mgr.set(dlg, status, spinner, status_row)
     return dlg
 
 
-_CONNECT_DIALOG = None
+def connect_dialog_status(message: str, ok: bool = False) -> None:
+    _dialog_mgr.update_status(message, ok)
 
 
-def _close_connect_dialog():
-    global _CONNECT_DIALOG
-    if _CONNECT_DIALOG:
-        try:
-            _CONNECT_DIALOG["dialog"].close()
-        except Exception:
-            pass
-        _CONNECT_DIALOG = None
-
-
-def connect_dialog_status(message, ok=False):
-    """Update the connect dialog: waiting -> success / failure."""
-    global _CONNECT_DIALOG
-    if not _CONNECT_DIALOG:
-        return
-    entry = _CONNECT_DIALOG
-    try:
-        if ok:
-            entry["spinner"].delete()
-            entry["row"].style(
-                f"background:rgba(34,197,94,0.08);"
-                f"border:1px solid rgba(34,197,94,.35)")
-            entry["status"].set_text(message)
-            entry["status"].style(f"color:{GOOD}")
-            ui.timer(1.4, _close_connect_dialog, once=True)
-        else:
-            entry["spinner"].delete()
-            entry["row"].style(
-                f"background:rgba(248,113,113,0.08);"
-                f"border:1px solid rgba(248,113,113,.35)")
-            entry["status"].set_text(message)
-            entry["status"].style(f"color:{DANGER}")
-    except Exception:
-        _CONNECT_DIALOG = None
-
-
-def code_dialog(box, event):
+def code_dialog(box: Dict[str, Optional[str]], event: threading.Event,
+                cancel_event: Optional[threading.Event] = None) -> None:
+    import threading as _threading
     dlg = ui.dialog()
 
-    def submit(entry):
+    def submit(entry: Any) -> None:
         box["code"] = entry.value or ""
+        event.set()
+        dlg.close()
+
+    def cancel() -> None:
+        if cancel_event is not None:
+            cancel_event.set()
         event.set()
         dlg.close()
 
@@ -553,18 +571,13 @@ def code_dialog(box, event):
                              placeholder="Paste the code Google showed you")
             entry.props("outlined dense").classes("flex-1")
         with ui.row().classes("w-full justify-end gap-2 mt-3"):
-            ui.button("Cancel", on_click=lambda: (event.set(), dlg.close())).props("flat")
+            ui.button("Cancel", on_click=cancel).props("flat")
             ui.button("OK", on_click=lambda: submit(entry)).props(
                 "color=primary no-caps")
     dlg.open()
 
 
-def pick_directory(title="Choose a folder"):
-    """Native folder picker (Windows).
-
-    Prefers the app window's native dialog (fast, runs in the window
-    process) and falls back to a Tk dialog when running in a plain browser.
-    """
+def pick_directory(title: str = "Choose a folder") -> Optional[str]:
     try:
         from nicegui import app as napp
         import webview
@@ -573,7 +586,7 @@ def pick_directory(title="Choose a folder"):
             result = nw.create_file_dialog(webview.FOLDER_DIALOG)
             if result:
                 return str(result[0])
-    except Exception:
+    except (ImportError, AttributeError, OSError):
         pass
     import tkinter as tk
     from tkinter import filedialog
@@ -587,9 +600,9 @@ def pick_directory(title="Choose a folder"):
     return path or None
 
 
-def open_in_explorer(path):
+def open_in_explorer(path: str) -> None:
     import os
     try:
         os.startfile(path)
-    except Exception:
+    except (OSError, AttributeError):
         pass

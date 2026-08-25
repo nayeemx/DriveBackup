@@ -1,8 +1,10 @@
 import json
 import os
+import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .backup import EXPORT_EXTS, get_manifest, load_verify_result, md5_of_file
 from .rclone_manager import manager
@@ -11,15 +13,17 @@ from ..utils.logging_utils import get_logger, now_iso
 
 LOG = get_logger()
 
-STATUS_OK = "OK"
-STATUS_EXPORTED = "OK (exported)"
-STATUS_MISSING = "MISSING"
-STATUS_SIZE = "SIZE MISMATCH"
-STATUS_HASH = "HASH MISMATCH"
-STATUS_EXTRA = "EXTRA (not in Drive)"
+STATUS_OK: str = "OK"
+STATUS_EXPORTED: str = "OK (exported)"
+STATUS_MISSING: str = "MISSING"
+STATUS_SIZE: str = "SIZE MISMATCH"
+STATUS_HASH: str = "HASH MISMATCH"
+STATUS_EXTRA: str = "EXTRA (not in Drive)"
 
 
-def verify_local(workers=8, progress_cb=None, line_cb=LOG.info):
+def verify_local(workers: int = 8,
+                 progress_cb: Optional[Callable[[float, str], None]] = None,
+                 line_cb: Callable[[str], None] = LOG.info) -> dict[str, Any]:
     manifest = load_manifest_for_verify()
     if not manifest:
         raise RuntimeError("No manifest found - run a backup first.")
@@ -32,9 +36,9 @@ def verify_local(workers=8, progress_cb=None, line_cb=LOG.info):
     if progress_cb:
         progress_cb(0, "Computing local checksums ...")
 
-    local_files = {}
+    local_files: Dict[str, dict[str, Any]] = {}
 
-    def hash_one(rel):
+    def hash_one(rel: str) -> Tuple[str, Optional[dict[str, Any]]]:
         p = local_dir / rel
         try:
             return rel, {"size": p.stat().st_size, "md5": md5_of_file(p)}
@@ -48,7 +52,7 @@ def verify_local(workers=8, progress_cb=None, line_cb=LOG.info):
             if meta:
                 local_files[rel] = meta
 
-    results = []
+    results: List[dict[str, str]] = []
     matched = missing = mismatch = extra = 0
     for item in files:
         path = item["path"]
@@ -95,7 +99,7 @@ def verify_local(workers=8, progress_cb=None, line_cb=LOG.info):
                 results.append({"path": rel, "status": STATUS_EXTRA})
 
     passed = missing == 0 and mismatch == 0
-    result = {
+    result: dict[str, Any] = {
         "created": now_iso(),
         "local_dir": str(local_dir),
         "total": len(files),
@@ -115,24 +119,27 @@ def verify_local(workers=8, progress_cb=None, line_cb=LOG.info):
     return result
 
 
-def load_manifest_for_verify():
+def load_manifest_for_verify() -> Optional[dict[str, Any]]:
     path = state_path("manifest.json")
     if not path.exists():
         return None
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except (json.JSONDecodeError, OSError):
         return None
 
 
-def check_remote(remote, local_dir, transfers=4, checkers=8, download=False,
-                 line_cb=LOG.info, root=""):
-    counts = {"files": 0, "missing": 0, "mismatch": 0, "error": 0}
+def check_remote(remote: str, local_dir: Union[str, Path], transfers: int = 4,
+                 checkers: int = 8, download: bool = False,
+                 line_cb: Callable[[str], None] = LOG.info,
+                 root: str = "",
+                 gphotos_proxy: str = "") -> dict[str, Any]:
+    counts: Dict[str, Any] = {"files": 0, "missing": 0, "mismatch": 0, "error": 0}
 
-    def on_line(line):
+    def on_line(line: str) -> None:
         line_cb(line)
         if "Checked" in line:
-            m = __import__("re").search(
+            m = re.search(
                 r"Checked\s+(\d+)\s+files?,\s+(\d+)\s+missing,\s+(\d+)\s+mismatch",
                 line)
             if m:
@@ -143,13 +150,14 @@ def check_remote(remote, local_dir, transfers=4, checkers=8, download=False,
             counts["error"] += 1
 
     manager.check(remote, local_dir, transfers, checkers, download, on_line,
-                  root=root)
+                  root=root, gphotos_proxy=gphotos_proxy)
     counts["passed"] = (counts["missing"] == 0 and counts["mismatch"] == 0
                         and counts["error"] == 0)
     return counts
 
 
-def verify_fresh(now=None, hours=24):
+def verify_fresh(now: Optional[datetime] = None,
+                 hours: int = 24) -> Tuple[bool, str]:
     data = load_verify_result()
     if not data or not data.get("passed"):
         return False, "No successful verification on record"

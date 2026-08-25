@@ -2,6 +2,7 @@ import os as _os
 import queue
 import socket
 import threading
+from typing import Any, Callable, Dict, List, Optional
 
 from nicegui import app, ui
 
@@ -19,7 +20,7 @@ _SHUTDOWN = threading.Event()
 _AUTO_CHECKED = False
 
 
-def pick_port(start=8085, tries=15):
+def pick_port(start: int = 8085, tries: int = 15) -> int:
     """Return the first free port on 127.0.0.1 (or 0 = OS-assigned).
 
     Another program (or a previous app instance) may already hold the
@@ -282,15 +283,15 @@ NAV_ITEMS = (("Dashboard", "home"), ("Backup", "cloud_download"),
              ("Help", "help"))
 
 
-def build(ctx: AppContext):
+def build(ctx: AppContext) -> None:
     """Build the whole UI. Runs inside the page's slot."""
     ui.add_head_html(f"<style>{CSS}</style>")
 
     tabs = ui.tabs().classes("w-full").props("dense")
     panels = ui.tab_panels(tabs, value="Dashboard").classes("w-full flex-1")
-    nav_btns = {}
+    nav_btns: Dict[str, Any] = {}
 
-    def navigate(name):
+    def navigate(name: str) -> None:
         tabs.set_value(name)
         for label, btn in nav_btns.items():
             if label == name:
@@ -330,7 +331,7 @@ def build(ctx: AppContext):
                 .style("color: #64748B")
 
     # --- footer console (collapsible) ---------------------------------------
-    console_visible = ctx.config.get("console_visible", "1") != "0"
+    console_visible: bool = ctx.config.get("console_visible", "1") != "0"
     with ui.footer().classes("px-2 py-1"):
         with ui.row().classes("w-full items-center gap-2"):
             btn = ui.button(icon="keyboard_arrow_down" if console_visible
@@ -347,7 +348,7 @@ def build(ctx: AppContext):
         console_box = ui.column().classes("w-full gap-0")
         ctx.console = LogConsole()
 
-        def toggle():
+        def toggle() -> None:
             nonlocal console_visible
             console_visible = not console_visible
             console_box.set_visibility(console_visible)
@@ -381,7 +382,7 @@ def build(ctx: AppContext):
     ui.timer(0.15, lambda: poll(ctx))
 
 
-def poll(ctx: AppContext):
+def poll(ctx: AppContext) -> None:
     """Drain background-job events on the UI thread."""
     hub = ctx.hub
     try:
@@ -392,7 +393,7 @@ def poll(ctx: AppContext):
         pass
 
 
-def _dispatch(ctx, evt):
+def _dispatch(ctx: AppContext, evt: tuple) -> None:
     kind = evt[0]
     if kind == "log":
         if ctx.console:
@@ -402,7 +403,7 @@ def _dispatch(ctx, evt):
             if job["running"]:
                 try:
                     job["on_progress"](evt[1], evt[2])
-                except Exception:
+                except (KeyError, ValueError, TypeError):
                     pass
                 break
     elif kind == "done":
@@ -412,16 +413,16 @@ def _dispatch(ctx, evt):
             job["running"] = False
             try:
                 job["on_done"](result, error)
-            except Exception:
+            except (KeyError, ValueError, TypeError):
                 pass
     elif kind == "auth_url":
         auth_url_dialog(evt[1], on_cancel=evt[2])
     elif kind == "ask_code":
-        code_dialog(evt[2], evt[1])
+        code_dialog(evt[2], evt[1], cancel_event=evt[3] if len(evt) > 3 else None)
 
 
 @ui.page("/")
-def _page():
+def _page() -> None:
     ctx = AppContext()
     build(ctx)
     ui.timer(3.0, lambda: _auto_update_check(ctx), once=True)
@@ -430,7 +431,7 @@ def _page():
         ui.timer(float(auto), _close_window)
 
 
-def _auto_update_check(ctx):
+def _auto_update_check(ctx: AppContext) -> None:
     """Check GitHub for a newer release a few seconds after startup.
 
     Mode (Settings -> Updates -> Automatic updates):
@@ -450,7 +451,7 @@ def _auto_update_check(ctx):
     if not owner or not repo:
         return
 
-    def fn(hub):
+    def fn(hub: Any) -> Any:
         hub.log("INFO", f"Checking GitHub for updates ({owner}/{repo}) ...")
         info, err = check_for_update(owner, repo)
         if err:
@@ -458,7 +459,7 @@ def _auto_update_check(ctx):
             return None
         return info
 
-    def on_done(result, error):
+    def on_done(result: Any, error: Any) -> None:
         if error or result is None:
             return
         info = result
@@ -479,35 +480,42 @@ def _auto_update_check(ctx):
     ctx.start_job("auto-update", fn, on_done=on_done)
 
 
-def _close_window():
+def _close_window() -> None:
     """Test hook: close the native window (mirrors the X button -> shutdown)."""
     if _WINDOW is not None:
         try:
             _WINDOW.destroy()
             return
-        except Exception:
+        except (OSError, AttributeError):
             pass
     app.shutdown()
 
 
-def _native_available():
+def _native_available() -> bool:
     try:
         import webview  # noqa: F401
         return True
-    except Exception:
+    except ImportError:
         return False
 
 
-def _close_splash():
+_SPLASH_CLOSED = False
+
+
+def _close_splash() -> None:
     """Close the bootloader splash once the real window is showing."""
+    global _SPLASH_CLOSED
+    if _SPLASH_CLOSED:
+        return
+    _SPLASH_CLOSED = True
     try:
         import pyi_splash  # type: ignore
         pyi_splash.close()
-    except Exception:
+    except (ImportError, OSError):
         pass
 
 
-def _kill_orphan_webviews():
+def _kill_orphan_webviews() -> None:
     """Kill WebView2 browser processes orphaned by dead app instances.
 
     If DriveBackup is terminated uncleanly (crash, force-kill, power loss),
@@ -541,8 +549,8 @@ def _kill_orphan_webviews():
         snap = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
         if snap in (-1, ctypes.c_void_p(-1).value):
             return
-        procs = []
-        alive = set()
+        procs: List[tuple] = []
+        alive: set = set()
         try:
             entry = PROCESSENTRY32()
             entry.dwSize = ctypes.sizeof(PROCESSENTRY32)
@@ -557,32 +565,24 @@ def _kill_orphan_webviews():
             kernel32.CloseHandle(snap)
 
         PROCESS_TERMINATE = 0x0001
-        kills = []
-        for _ in range(8):
-            found = False
-            for pid, ppid, name in procs:
-                if (name.lower() == "msedgewebview2.exe"
-                        and ppid not in alive and pid not in kills):
-                    kills.append(pid)
-                    found = True
-            if not found:
-                break
+        kills: set = set()
+        for pid, ppid, name in procs:
+            if (name.lower() == "msedgewebview2.exe"
+                    and ppid not in alive and pid not in kills):
+                kills.add(pid)
         for pid in kills:
             try:
                 h = kernel32.OpenProcess(PROCESS_TERMINATE, False, pid)
                 if h:
                     kernel32.TerminateProcess(h, 1)
                     kernel32.CloseHandle(h)
-                    alive.discard(pid)
-            except Exception:
+            except (OSError, WindowsError):
                 pass
-        if kills:
-            pass
-    except Exception:
+    except (ImportError, OSError):
         pass
 
 
-def _run_native():
+def _run_native() -> None:
     """Run the server and the window in SEPARATE processes.
 
     Root cause of the 40-60 s startup stall: WebView2's initialization and
@@ -601,16 +601,20 @@ def _run_native():
            native=True, window_size=WINDOW_SIZE)
 
 
-def _shutdown_watchdog():
+def _shutdown_watchdog() -> None:
     """Force-exit if a shutdown was requested but the GUI loop never returns."""
     if not _SHUTDOWN.wait(timeout=300):
         return
     import time
     time.sleep(6)
+    try:
+        app.shutdown()
+    except (OSError, RuntimeError):
+        pass
     _os._exit(0)
 
 
-def run():
+def run() -> None:
     app.on_shutdown(lambda: (_SHUTDOWN.set(),
                              print("DriveBackup closed.")))
     threading.Thread(target=_shutdown_watchdog, daemon=True).start()

@@ -1,9 +1,10 @@
 from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 from ..utils.config import format_bytes, report_path
 
 
-def _table(headers, rows):
+def _table(headers: List[str], rows: List[List[Any]]) -> str:
     lines = ["| " + " | ".join(headers) + " |",
              "|" + "|".join(["---"] * len(headers)) + "|"]
     for row in rows:
@@ -11,10 +12,14 @@ def _table(headers, rows):
     return "\n".join(lines)
 
 
-def generate_report(backup=None, verify=None, analysis=None, plan=None,
-                    llm_summary=None, ai_findings=None) -> str:
+def generate_report(backup: Optional[dict[str, Any]] = None,
+                    verify: Optional[dict[str, Any]] = None,
+                    analysis: Optional[dict[str, Any]] = None,
+                    plan: Optional[List[dict[str, Any]]] = None,
+                    llm_summary: Optional[str] = None,
+                    ai_findings: Optional[List[dict[str, str]]] = None) -> str:
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    out = []
+    out: List[str] = []
     out.append(f"# Drive Backup Report\n\nGenerated: {now}\n")
 
     if backup:
@@ -64,7 +69,7 @@ def generate_report(backup=None, verify=None, analysis=None, plan=None,
 
     if plan:
         out.append("\n## Suggested Organization\n")
-        cats = {}
+        cats: Dict[str, dict[str, Any]] = {}
         for entry in plan:
             cats.setdefault(entry["category"], {"count": 0, "target": entry["target"]})
             cats[entry["category"]]["count"] += 1

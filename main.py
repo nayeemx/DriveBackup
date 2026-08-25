@@ -3,6 +3,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Any, Callable, Optional
 
 from app.ai import analyzer as ai_analyzer
 from app.ai.report import generate_report, save_report
@@ -16,11 +17,11 @@ from app.utils.logging_utils import get_logger, log, set_console_callback
 LOG = get_logger()
 
 
-def _print_cb(msg, level):
+def _print_cb(msg: str, level: str) -> None:
     sys.stderr.write(msg + "\n")
 
 
-def _cli_connect(cfg, args):
+def _cli_connect(cfg: Any, args: Any) -> int:
     remote = cfg.get("remote")
     manager.ensure_binary(progress=lambda t: print(t))
     print(f"rclone version: {manager.version()}")
@@ -31,15 +32,15 @@ def _cli_connect(cfg, args):
     print("Open the URL below in your browser, log in with the Google account\n"
           "that owns the Drive, approve access, then paste the code here.\n")
     manager.connect(
-        remote, cfg.get("export_formats"),
+        remote, "drive", cfg.get("export_formats"),
         auth_cb=lambda url, ce=None: print("AUTH URL: " + url),
-        code_cb=lambda: input("Authorization code: ").strip(),
+        code_cb=lambda ce=None: input("Authorization code: ").strip(),
     )
     print("Connected successfully.")
     return 0
 
 
-def _cli_inventory(cfg, args):
+def _cli_inventory(cfg: Any, args: Any) -> int:
     remote = cfg.get("remote")
     inv = manager.lsjson(remote)
     total = sum(f.get("Size", 0) for f in inv)
@@ -51,7 +52,7 @@ def _cli_inventory(cfg, args):
     return 0
 
 
-def _cli_backup(cfg, args):
+def _cli_backup(cfg: Any, args: Any) -> int:
     remote = cfg.get("remote")
     result = bk.backup(remote, args.dir,
                        transfers=int(cfg.get("transfers")),
@@ -62,7 +63,7 @@ def _cli_backup(cfg, args):
     return 0
 
 
-def _cli_verify(cfg, args):
+def _cli_verify(cfg: Any, args: Any) -> int:
     result = vf.verify_local(line_cb=lambda m: print(m, file=sys.stderr))
     print(f"VERIFY: {'PASS' if result['passed'] else 'FAIL'} - "
           f"{result['matched']} OK, {result['missing']} missing, "
@@ -70,7 +71,7 @@ def _cli_verify(cfg, args):
     return 0 if result["passed"] else 1
 
 
-def _cli_deepcheck(cfg, args):
+def _cli_deepcheck(cfg: Any, args: Any) -> int:
     remote = cfg.get("remote")
     manifest = vf.load_manifest_for_verify()
     if not manifest:
@@ -85,7 +86,7 @@ def _cli_deepcheck(cfg, args):
     return 0 if counts["passed"] else 1
 
 
-def _cli_analyze(cfg, args):
+def _cli_analyze(cfg: Any, args: Any) -> int:
     a = ai_analyzer.analyze()
     print(f"FILES: {a['count']}  SIZE: {format_bytes(a['size'])}")
     for k, v in sorted(a["categories"].items(), key=lambda kv: -kv[1]["size"]):
@@ -97,7 +98,7 @@ def _cli_analyze(cfg, args):
     return 0
 
 
-def _cli_report(cfg, args):
+def _cli_report(cfg: Any, args: Any) -> int:
     analysis = ai_analyzer.analyze()
     verify = vf.load_verify_result() or None
     content = generate_report(None, verify, analysis,
@@ -107,7 +108,7 @@ def _cli_report(cfg, args):
     return 0
 
 
-def _wipe_command(cfg, args, action):
+def _wipe_command(cfg: Any, args: Any, action: str) -> int:
     remote = cfg.get("remote")
     wp.require_fresh_verification(cfg)
     if args.phrase != "DELETE ALL":
@@ -126,7 +127,7 @@ def _wipe_command(cfg, args, action):
     return 0
 
 
-def _acquire_single_instance():
+def _acquire_single_instance() -> Optional[Any]:
     """Windows named mutex: only one app instance may run.
 
     A second launch exits immediately instead of opening a second window
@@ -152,7 +153,7 @@ def _acquire_single_instance():
 _SINGLE_INSTANCE = None
 
 
-def main():
+def main() -> int:
     global _SINGLE_INSTANCE
     set_console_callback(_print_cb)
     parser = argparse.ArgumentParser(
@@ -192,7 +193,6 @@ def main():
 
     args = parser.parse_args()
     if not args.command:
-        global _SINGLE_INSTANCE
         _SINGLE_INSTANCE = _acquire_single_instance()
         if _SINGLE_INSTANCE is None and os.name == "nt":
             # Another DriveBackup is already running - it owns the port/window.
@@ -209,7 +209,7 @@ def main():
         return 1
     try:
         return args.fn(cfg, args) or 0
-    except Exception as exc:
+    except (OSError, ValueError) as exc:
         print(f"ERROR: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
 
