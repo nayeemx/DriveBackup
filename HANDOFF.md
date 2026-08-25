@@ -12,6 +12,7 @@ disconnect account, AI analysis report (OpenRouter key optional).
 ## Current state (last session ended)
 - **Latest released version: v0.1.34** — live on GitHub
   https://github.com/nayeemx/DriveBackup/releases/tag/v0.1.34
+  (DriveBackup-Setup-0.1.34.exe, 51.4 MB, state=uploaded, released 2026-08-25).
 - v0.1.34 fixes verify hash mismatch, Google Photos remote detection, and adds
   gphotosdl proxy support for original quality Google Photos downloads.
 - v0.1.33 fixes the in-app updater end-to-end (PROBLEMS.md #14).
