@@ -52,9 +52,10 @@ def info_card(icon: str, title: str, lines: List[str],
             ui.label(title).classes("text-sm font-semibold")
         with ui.column().classes("w-full gap-0.5 mt-1"):
             for line in lines:
-                with ui.row().classes("items-start gap-2"):
-                    ui.label("•").classes("text-xs").style(f"color:{accent}")
-                    ui.label(line).classes("text-sm").style(f"color:{MUTED}")
+                with ui.row().classes("items-start gap-2 w-full"):
+                    ui.label("•").classes("text-xs shrink-0").style(f"color:{accent}")
+                    ui.label(line).classes("text-sm break-words").style(
+                        f"color:{MUTED}; word-break:break-word; overflow-wrap:anywhere")
 
 
 class LogConsole:
@@ -132,6 +133,8 @@ class StatCard:
 
 
 def _rgb(hex_color: str, alpha: str = "0.12") -> str:
+    if hex_color.startswith("var("):
+        return f"66,133,244,{alpha}" if "primary" in hex_color else f"0,0,0,{alpha}"
     h = hex_color.lstrip("#")
     if len(h) == 3:
         h = "".join(c * 2 for c in h)

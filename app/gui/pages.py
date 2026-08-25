@@ -688,7 +688,7 @@ class VerifyPage:
                  "step further: it re-downloads files from Drive and compares "
                  "them (extra safety, uses your data allowance)."])
             with ui.card().props("flat bordered").classes("w-full"):
-                with ui.row().classes("items-center gap-2"):
+                with ui.row().classes("w-full items-center gap-2 flex-wrap"):
                     self.verify_btn = ui.button("Verify backup", icon="fact_check",
                                                 on_click=self._verify).props(
                         "color=primary no-caps")
@@ -1124,7 +1124,7 @@ class WipePage:
                     ui.icon("warning").classes("text-3xl") \
                         .style(f"color:{DANGER}")
                     ui.label("The dangerous part").classes(
-                        "text-lg font-semibold").style(f"color:#FCA5A5")
+                        "text-lg font-semibold").style(f"color:{DANGER}")
 
             self.gate = ui.label("").classes("text-sm font-semibold mt-4")
             ui.label("Type the confirmation phrase to unlock:  DELETE ALL").classes(
@@ -1137,7 +1137,7 @@ class WipePage:
             self.checkbox = ui.checkbox("I verified the backup: every file exists "
                                         "locally and passed checksum verification",
                                         on_change=self._update_buttons)
-            with ui.row().classes("items-center gap-2 mt-2"):
+            with ui.row().classes("w-full items-center gap-2 mt-2 flex-wrap"):
                 self.trash_btn = ui.button("1. Move to Trash", icon="delete",
                                            on_click=self._trash).props(
                     "color=warning no-caps")
@@ -1361,7 +1361,7 @@ class SettingsPage:
                                            "tracking-[0.16em]") \
                     .style(f"color:{MUTED}")
                 with ui.element("div").classes(
-                        "w-full grid grid-cols-1 md:grid-cols-2 gap-x-6 "
+                        "w-full grid grid-cols-1 sm:grid-cols-2 gap-x-6 "
                         "gap-y-3 mt-2"):
                     self.transfers = ui.number("Parallel downloads (transfers)",
                                                value=self.ctx.config.get("transfers"),
@@ -1542,49 +1542,69 @@ class HelpPage:
             
             with ui.card().classes("w-full max-w-4xl hover-lift").props("flat bordered"):
                 ui.markdown('''
-### 🚀 The 5-Step Journey
+### The 5-Step Journey
 
 Master the safety-first workflow of DriveBackup.
 
 | Step | Action | Description |
 | :--- | :--- | :--- |
-| <span style="color:var(--primary); font-weight:bold;">1. Connect</span> | **Dashboard** | Securely link your Google Drive. We only get access, never your password. |
-| <span style="color:var(--primary); font-weight:bold;">2. Back up</span> | **Backup tab** | Select an empty local folder. We download your files and create a secure manifest. |
-| <span style="color:var(--primary); font-weight:bold;">3. Verify</span> | **Verify tab** | *The Safety Gate.* We check that every local file exactly matches the cloud version. |
-| <span style="color:var(--primary); font-weight:bold;">4. Analyze</span> | **Analyze tab** | Discover duplicates, large files, and junk. Integrate AI for deeper insights. |
-| <span style="color:var(--primary); font-weight:bold;">5. Wipe</span> | **Wipe tab** | *Locked until verified.* Move everything to Drive Trash safely, then empty it forever. |
+| 1. Connect | **Dashboard** | Securely link your Google Drive or Google Photos. We only get access, never your password. |
+| 2. Back up | **Backup tab** | Select an empty local folder. We download your files and create a secure manifest. |
+| 3. Verify | **Verify tab** | *The Safety Gate.* We check that every local file exactly matches the cloud version. |
+| 4. Analyze | **Analyze tab** | Discover duplicates, large files, and junk. Integrate AI for deeper insights. |
+| 5. Wipe | **Wipe tab** | *Locked until verified.* Move everything to Drive Trash safely, then empty it forever. |
 ''').classes("w-full")
 
             with ui.card().classes("w-full max-w-4xl mt-4 hover-lift").props("flat bordered"):
                 ui.markdown('''
-### 🛡️ Common Questions & Security
+### Google Drive vs Google Photos
+
+DriveBackup supports both Google Drive and Google Photos.
+
+**Google Drive:** Full backup, verify, and wipe support. Files are downloaded at original quality with MD5 verification.
+
+**Google Photos:** Backup and analyze work. However, **Google Photos API prohibits third-party deletion**, so the Wipe tab is locked when Photos is active. Downloads may be slightly compressed by Google's API.
+
+**Original Quality Photos:** To download original quality images, run the [gphotosdl proxy](https://github.com/rclone/gphotosdl) alongside rclone, then configure the proxy URL in **Settings > Google Photos**.
+''').classes("w-full")
+
+            with ui.card().classes("w-full max-w-4xl mt-4 hover-lift").props("flat bordered"):
+                ui.markdown('''
+### Common Questions & Security
 
 **Is my data actually safe?**
 Yes. Everything stays on your local PC. The only exception is if you explicitly enable the optional AI features, which send file metadata (names and sizes, not the contents) to the AI provider you configured.
 
 **Does Wipe touch my Gmail or Google Photos?**
-No. Wipe is strictly scoped to Google Drive files.
+No. Wipe is strictly scoped to Google Drive files. Google Photos cannot be wiped via the API.
 
 **What happens to files shared with me?**
 Wipe simply removes them from your view. It does not delete the original files owned by others.
+
+**How do updates work?**
+The app checks GitHub for updates on startup. You can also manually check in Settings > Updates. Updates install in place — your settings and Google connection are preserved.
 ''').classes("w-full")
 
             with ui.card().classes("w-full max-w-4xl mt-4 hover-lift").props("flat bordered"):
                 ui.markdown(f'''
-### 📂 Data Locations
+### Data Locations
 
 Knowing where your data lives is key to staying organized.
 
-- **Manifest & Logs:** `{str(state_path(""))}`
+- **App config & tokens:** `{str(state_path("").parent)}`
+- **Manifest & verify results:** `{str(state_path(""))}`
+- **Reports:** `{str(state_path("").parent / "reports")}`
 - **Default Backup Folder:** `{str(Path.home() / "DriveBackup")}` *(You can change this on the Backup tab)*
 ''').classes("w-full")
 
             with ui.card().classes("w-full max-w-4xl mt-4 hover-lift").props("flat bordered"):
                 ui.markdown('''
-### 🔧 Troubleshooting Guide
+### Troubleshooting Guide
 
-- **Connection failing?** Sign out of Google in your browser and try again.
+- **Connection failing?** Sign out of Google in your browser and try again. Or try Settings > Updates > reconnect.
 - **Folder must be empty?** DriveBackup refuses to mix backups to prevent data corruption. Select a brand new folder.
 - **Verify keeps failing?** Delete the specific failing file locally and re-run Backup. It will seamlessly resume and fix the manifest.
+- **SmartScreen warning?** This is normal for unsigned apps. Click "More info" > "Run anyway". Only fix is a paid code-signing cert.
+- **App won't update?** Close the app, then run the new installer manually. It will upgrade in place.
 - **Still stuck?** Check the log at `%APPDATA%\\DriveBackup\\app.log` for detailed technical traces.
 ''').classes("w-full")

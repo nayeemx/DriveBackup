@@ -132,10 +132,10 @@ body { --q-primary: var(--primary); --q-secondary: var(--primary-hover);
   border: 1px solid var(--border);
   border-radius: 16px;
   box-shadow: 0 8px 32px 0 var(--shadow-color) !important;
-  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.3s ease;
+  transition: box-shadow 0.3s ease;
 }
 
-.q-card:hover {
+.hover-lift:hover {
   transform: translateY(-2px);
   box-shadow: 0 12px 40px 0 var(--shadow-color), 0 0 15px rgba(255,255,255,0.03) !important;
 }
@@ -247,7 +247,13 @@ button, .q-btn, .q-link, a, .q-item, [role="button"], .q-field__input { cursor: 
 .nav-item.active .q-icon { color: var(--primary) !important; filter: drop-shadow(0 0 8px var(--glow-primary)); }
 
 /* Page content */
-.q-tab-panel { max-width: 1080px; margin: 0 auto; animation: fadeUp 0.5s ease-out; }
+.q-tab-panel {
+  max-width: 1080px;
+  margin: 0 auto;
+  animation: fadeUp 0.5s ease-out;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
 
 @keyframes fadeUp {
   from { opacity: 0; transform: translateY(10px); }
@@ -256,11 +262,18 @@ button, .q-btn, .q-link, a, .q-item, [role="button"], .q-field__input { cursor: 
 
 /* Responsive stat cards */
 .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-@media (min-width: 1280px) { .stats-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (min-width: 900px) { .stats-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+
+/* Table constraints */
+.q-table { max-height: 400px; overflow-y: auto; }
+.q-table__middle { max-height: 380px; }
 
 /* Markdown */
 .q-markdown h3, .markdown h3 { font-family: 'Outfit', sans-serif; font-size: 18px; font-weight: 600; margin: 24px 0 8px; color: var(--primary); }
 .q-markdown li, .markdown li { margin: 4px 0; }
+.q-markdown table, .markdown table { width: 100%; overflow-x: auto; display: block; }
+.q-markdown td, .markdown td { max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.q-markdown td:last-child, .markdown td:last-child { white-space: normal; word-break: break-word; }
 
 /* Custom Scrollbars */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
@@ -288,7 +301,7 @@ def build(ctx: AppContext) -> None:
     ui.add_head_html(f"<style>{CSS}</style>")
 
     tabs = ui.tabs().classes("w-full").props("dense")
-    panels = ui.tab_panels(tabs, value="Dashboard").classes("w-full flex-1")
+    panels = ui.tab_panels(tabs, value="Dashboard").classes("w-full flex-1 overflow-y-auto")
     nav_btns: Dict[str, Any] = {}
 
     def navigate(name: str) -> None:
