@@ -192,3 +192,16 @@ fix was verified. Status legend: **SOLVED** (verified), **WORKAROUND**
 | Root cause | The custom typography CSS in `app.py` applied the `Outfit` font family to classes like `.text-xl`, `.text-lg`, and `.font-semibold`. When these sizing classes were used on icon elements (e.g., `ui.icon(...).classes("text-xl")`), the CSS overrode Quasar's default `Material Icons` font family, causing the browser to render the raw text. A previous attempt (v0.1.37) to fix this by importing the font via `@import` failed because the typography class specificity still took precedence. |
 | Fix | v0.1.38 added a global, `!important` CSS rule targeting `.q-icon, .material-icons` to explicitly enforce `font-family: 'Material Icons' !important;`. This ensures all icons render correctly regardless of other typography classes applied to them. |
 | Verification | Manual: verified Dashboard, Verify, Backup, Analyze, Wipe, Settings, and Help pages. All icons render as graphical glyphs instead of text. |
+
+---
+
+## 19. 500 Server Error — `AttributeError: 'Icon' object has no attribute 'set_icon'`
+
+| | |
+|---|---|
+| Status | **SOLVED** (v0.1.40) |
+| Symptom | App opened to a "500 Server error" page with the message `AttributeError: 'Icon' object has no attribute 'set_icon'`. The Dashboard page was completely unusable. |
+| Root cause | In v0.1.39, `StatCard.set_icon()` was added to `widgets.py` with the incorrect call `self.icon_el.set_icon(icon)`. NiceGUI 3.16's `Icon` element (which extends `NameElement`) has **no `.set_icon()` method** — the correct API is `.set_name()`. The erroneous call was made when `DashboardPage.refresh()` tried to update the Connection stat card icon (`cloud_off` ↔ `cloud_done`). |
+| Fix | v0.1.40 — changed `self.icon_el.set_icon(icon)` → `self.icon_el.set_name(icon)` in `StatCard.set_icon()` (`app/gui/widgets.py`). `set_name()` is the proper NiceGUI 3.16 `NameElement` API — it updates the underlying prop and triggers a client-side sync without needing a manual `.update()` call. |
+| Verification | App starts without error; Dashboard page loads with HTTP 200; Connection stat card icon updates correctly on connect/disconnect. |
+

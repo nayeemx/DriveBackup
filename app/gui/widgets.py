@@ -132,7 +132,7 @@ class StatCard:
             self.value_el.style(f"color: {color}")
 
     def set_icon(self, icon: str, color: Optional[str] = None) -> None:
-        self.icon_el.set_icon(icon)
+        self.icon_el.set_name(icon)
         if color:
             self.icon_el.style(f"color: {color}")
 
