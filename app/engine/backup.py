@@ -162,21 +162,22 @@ def _scan_inventory(inventory: List[dict[str, Any]]) -> tuple[List[dict], List[d
     problematic = []
     warnings = []
 
-    name_count: Dict[str, int] = {}
+    path_count: Dict[str, int] = {}
     for item in inventory:
         path = item.get("Path") or item.get("Name") or ""
-        name = path.rsplit("/", 1)[-1] if "/" in path else path
-        name_count[name] = name_count.get(name, 0) + 1
+        path_count[path] = path_count.get(path, 0) + 1
 
     for item in inventory:
         path = item.get("Path") or item.get("Name") or ""
-        name = path.rsplit("/", 1)[-1] if "/" in path else path
+        parts = path.split("/")
         reasons = []
-        for ch in WIN_ILLEGAL:
-            if ch in name:
-                reasons.append(f"illegal char '{ch}'")
-        if name_count.get(name, 0) > 1:
-            reasons.append("duplicate name")
+        for part in parts:
+            for ch in WIN_ILLEGAL:
+                if ch in part:
+                    reasons.append(f"illegal char '{ch}' in '{part}'")
+                    break
+        if path_count.get(path, 0) > 1:
+            reasons.append("duplicate path")
         if reasons:
             item["_skip_reason"] = "; ".join(reasons)
             problematic.append(item)
