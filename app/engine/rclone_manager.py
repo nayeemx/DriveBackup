@@ -406,12 +406,14 @@ class RcloneManager:
              line_cb: Callable[[str], None], root: str = "",
              extra_args: Optional[list[str]] = None,
              gphotos_proxy: str = "") -> bool:
+        backup_dir = str(Path(local_dir).parent / "_backup_conflicts")
         args = [
             "copy", f"{remote}:{root}", str(local_dir),
             "--create-empty-src-dirs",
             "--checksum",
             "--fast-list",
             "--local-encoding", "Colon,Asterisk,Question,DoubleQuote,LtGt,Pipe,Ctl",
+            "--backup-dir", backup_dir,
             "--transfers", str(transfers),
             "--checkers", str(checkers),
             "--stats", "2s",
