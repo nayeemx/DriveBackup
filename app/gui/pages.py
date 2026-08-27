@@ -655,12 +655,18 @@ class BackupPage:
             ui.notify(f"Backup failed: {msg}", type="negative", timeout=10000)
             self.progress_label.set_text("Backup failed - can retry")
             return
-        self.summary.set_text(
+        failed = result.get("failed", 0)
+        summary = (
             f"Backup complete: {_fmt(result['files'])} files, "
             f"{format_bytes(result['bytes'])} - {result['ok']} present, "
             f"{result['missing']} missing")
-        self.progress_label.set_text("Backup complete")
-        ui.notify("Backup complete", type="positive", position="top-right")
+        if failed:
+            summary += f", {failed} skipped (see failed_files.json)"
+            self.ctx.hub.log("WARNING", f"{failed} file(s) could not be downloaded - check state/failed_files.json")
+        self.summary.set_text(summary)
+        self.progress_label.set_text("Backup complete" + (f" ({failed} skipped)" if failed else ""))
+        ui.notify("Backup complete" + (f" ({failed} files skipped)" if failed else ""),
+                  type="positive" if not failed else "warning", position="top-right")
         self.ctx.hub.log("SUCCESS", f"Backup manifest saved to {result['manifest']}")
         self._update_scope_summary()
 

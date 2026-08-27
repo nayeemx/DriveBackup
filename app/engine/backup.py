@@ -152,6 +152,44 @@ def _write_files_list(files: List[str], tmp_dir: Path) -> str:
     return path
 
 
+def _scan_inventory(inventory: List[dict[str, Any]]) -> tuple[List[dict], List[dict], List[str]]:
+    """Categorize files into safe-to-download and problematic.
+
+    Returns (safe_files, problematic_files, warnings).
+    """
+    WIN_ILLEGAL = set(':*?"<>|')
+    safe = []
+    problematic = []
+    warnings = []
+
+    name_count: Dict[str, int] = {}
+    for item in inventory:
+        path = item.get("Path") or item.get("Name") or ""
+        name = path.rsplit("/", 1)[-1] if "/" in path else path
+        name_count[name] = name_count.get(name, 0) + 1
+
+    for item in inventory:
+        path = item.get("Path") or item.get("Name") or ""
+        name = path.rsplit("/", 1)[-1] if "/" in path else path
+        reasons = []
+        for ch in WIN_ILLEGAL:
+            if ch in name:
+                reasons.append(f"illegal char '{ch}'")
+        if name_count.get(name, 0) > 1:
+            reasons.append("duplicate name")
+        if reasons:
+            item["_skip_reason"] = "; ".join(reasons)
+            problematic.append(item)
+        else:
+            safe.append(item)
+
+    if problematic:
+        warnings.append(
+            f"{len(problematic)} file(s) need special handling "
+            f"({len(safe)} safe to download first)")
+    return safe, problematic, warnings
+
+
 def backup(remote: str, local_dir: Union[str, Path], transfers: int = 4,
            checkers: int = 8,
            line_cb: Callable[[str], None] = LOG.info,
@@ -216,8 +254,14 @@ def backup(remote: str, local_dir: Union[str, Path], transfers: int = 4,
     state_path("inventory.json").write_text(
         json.dumps(inventory, indent=1), encoding="utf-8")
 
+    safe_files, problem_files, scan_warnings = _scan_inventory(inventory)
+    for w in scan_warnings:
+        LOG.info(w)
+    if progress_cb and scan_warnings:
+        progress_cb(0.01, scan_warnings[0])
+
     if progress_cb:
-        progress_cb(1, "Downloading files ...")
+        progress_cb(0.02, f"Downloading {len(safe_files)} safe files ...")
     total = sum(f.get("Size", 0) for f in inventory) or 1
 
     def on_line(line: str) -> None:
@@ -236,27 +280,62 @@ def backup(remote: str, local_dir: Union[str, Path], transfers: int = 4,
 
     tmp_list: Optional[str] = None
     in_progress_flag = state_path("backup_in_progress")
+    failed_files: List[dict[str, str]] = []
+
     try:
-        if files_only:
-            tmp_list = _write_files_list(files_only, Path(tempfile.gettempdir()))
-        filters = _scope_filters(includes, excludes, files_only, tmp_list)
         in_progress_flag.write_text(now_iso(), encoding="utf-8")
-        max_retries = 3
-        for attempt in range(max_retries):
+
+        safe_paths = [f.get("Path") or f.get("Name") for f in safe_files]
+        if safe_paths:
+            tmp_safe = _write_files_list(safe_paths, Path(tempfile.gettempdir()))
             try:
-                manager.copy(remote, local_dir, transfers, checkers, on_line,
-                             root=root, extra_args=filters,
-                             gphotos_proxy=gphotos_proxy)
-                break
-            except RcloneError as exc:
-                if attempt < max_retries - 1:
-                    wait = 5 * (2 ** attempt)
-                    LOG.warning(f"Backup copy failed (attempt {attempt + 1}/{max_retries}): {exc}")
-                    if progress_cb:
-                        progress_cb(None, f"Connection lost. Retrying in {wait}s ... ({attempt + 1}/{max_retries})")
-                    time.sleep(wait)
-                else:
-                    raise
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        manager.copy(remote, local_dir, transfers, checkers,
+                                     on_line, root=root,
+                                     extra_args=["--files-from-raw", tmp_safe],
+                                     gphotos_proxy=gphotos_proxy)
+                        break
+                    except RcloneError as exc:
+                        if attempt < max_retries - 1:
+                            wait = 5 * (2 ** attempt)
+                            LOG.warning(f"Safe batch failed (attempt {attempt + 1}/{max_retries}): {exc}")
+                            if progress_cb:
+                                progress_cb(None, f"Connection lost. Retrying in {wait}s ... ({attempt + 1}/{max_retries})")
+                            time.sleep(wait)
+                        else:
+                            LOG.error(f"Safe batch failed after {max_retries} attempts: {exc}")
+            finally:
+                try:
+                    os.unlink(tmp_safe)
+                except OSError:
+                    pass
+
+        if problem_files:
+            if progress_cb:
+                progress_cb(0.5, f"Attempting {len(problem_files)} problematic files ...")
+            for i, item in enumerate(problem_files):
+                path = item.get("Path") or item.get("Name")
+                reason = item.get("_skip_reason", "unknown")
+                if progress_cb:
+                    progress_cb(0.5 + 0.45 * (i / len(problem_files)),
+                                f"Trying problematic file {i+1}/{len(problem_files)}: {path}")
+                tmp_prob = _write_files_list([path], Path(tempfile.gettempdir()))
+                try:
+                    manager.copy(remote, local_dir, transfers, checkers,
+                                 on_line, root=root,
+                                 extra_args=["--files-from-raw", tmp_prob],
+                                 gphotos_proxy=gphotos_proxy)
+                except RcloneError as exc:
+                    LOG.warning(f"Skipping {path}: {reason} - {exc}")
+                    failed_files.append({"path": path, "reason": reason, "error": str(exc)})
+                finally:
+                    try:
+                        os.unlink(tmp_prob)
+                    except OSError:
+                        pass
+
     finally:
         try:
             in_progress_flag.unlink(missing_ok=True)
@@ -313,11 +392,19 @@ def backup(remote: str, local_dir: Union[str, Path], transfers: int = 4,
     ok = sum(1 for f in result_files if f["local"])
     missing = len(result_files) - ok
     LOG.info(f"Backup manifest: {ok} files present locally, {missing} missing")
+
+    if failed_files:
+        report_path = state_path("failed_files.json")
+        report_path.write_text(json.dumps(failed_files, indent=1), encoding="utf-8")
+        LOG.warning(f"{len(failed_files)} file(s) could not be downloaded. See {report_path}")
+
     return {
         "files": len(result_files),
         "bytes": sum(f["size"] for f in result_files),
         "local_files": len(local),
         "ok": ok,
         "missing": missing,
+        "failed": len(failed_files),
+        "failed_files": failed_files,
         "manifest": str(state_path("manifest.json")),
     }
