@@ -3,6 +3,7 @@ import json
 import os
 import re
 import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
@@ -162,11 +163,18 @@ def backup(remote: str, local_dir: Union[str, Path], transfers: int = 4,
            gphotos_proxy: str = "") -> dict[str, Any]:
     local_dir = Path(local_dir)
     local_dir.mkdir(parents=True, exist_ok=True)
+
+    resuming = False
     if any(local_dir.iterdir()):
-        raise RcloneError(
-            f"Backup folder is not empty: {local_dir}\n"
-            "Choose an empty folder to keep the backup clean."
-        )
+        inv_path = state_path("inventory.json")
+        if inv_path.exists():
+            resuming = True
+            LOG.info(f"Resuming previous backup into non-empty folder: {local_dir}")
+        else:
+            raise RcloneError(
+                f"Backup folder is not empty: {local_dir}\n"
+                "Choose an empty folder to keep the backup clean."
+            )
 
     if progress_cb:
         progress_cb(0, "Listing Drive contents ...")
@@ -227,13 +235,33 @@ def backup(remote: str, local_dir: Union[str, Path], transfers: int = 4,
         line_cb(line)
 
     tmp_list: Optional[str] = None
+    in_progress_flag = state_path("backup_in_progress")
     try:
         if files_only:
             tmp_list = _write_files_list(files_only, local_dir.parent)
         filters = _scope_filters(includes, excludes, files_only, tmp_list)
-        manager.copy(remote, local_dir, transfers, checkers, on_line, root=root,
-                     extra_args=filters, gphotos_proxy=gphotos_proxy)
+        in_progress_flag.write_text(now_iso(), encoding="utf-8")
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                manager.copy(remote, local_dir, transfers, checkers, on_line,
+                             root=root, extra_args=filters,
+                             gphotos_proxy=gphotos_proxy)
+                break
+            except RcloneError as exc:
+                if attempt < max_retries - 1:
+                    wait = 5 * (2 ** attempt)
+                    LOG.warning(f"Backup copy failed (attempt {attempt + 1}/{max_retries}): {exc}")
+                    if progress_cb:
+                        progress_cb(None, f"Connection lost. Retrying in {wait}s ... ({attempt + 1}/{max_retries})")
+                    time.sleep(wait)
+                else:
+                    raise
     finally:
+        try:
+            in_progress_flag.unlink(missing_ok=True)
+        except OSError:
+            pass
         if tmp_list:
             try:
                 os.unlink(tmp_list)

@@ -205,3 +205,15 @@ fix was verified. Status legend: **SOLVED** (verified), **WORKAROUND**
 | Fix | v0.1.40 — changed `self.icon_el.set_icon(icon)` → `self.icon_el.set_name(icon)` in `StatCard.set_icon()` (`app/gui/widgets.py`). `set_name()` is the proper NiceGUI 3.16 `NameElement` API — it updates the underlying prop and triggers a client-side sync without needing a manual `.update()` call. |
 | Verification | App starts without error; Dashboard page loads with HTTP 200; Connection stat card icon updates correctly on connect/disconnect. |
 
+---
+
+## 20. Backup fails to resume after interruption — "Backup folder is not empty"
+
+| | |
+|---|---|
+| Status | **SOLVED** (v0.1.41) |
+| Symptom | Backup starts, downloads ~150 MB, then connection to Google Drive drops. User retries to the same folder — fails with `RcloneError: Backup folder is not empty`. User must pick a brand-new empty folder, losing all progress. |
+| Root cause | `backup()` in `app/engine/backup.py:165-169` had a hard gate that rejected any non-empty destination directory before even listing Drive contents. rclone's `--checksum` flag (already in use) would naturally skip already-transferred files on re-run, but the app's empty-folder check prevented reaching rclone at all. Additionally, there was no retry logic around the `manager.copy()` call — a single transient connection failure killed the entire backup. |
+| Fix | Three-part fix in `app/engine/backup.py` and `app/gui/pages.py`: 1) **Resume-aware gate**: When destination is non-empty, check if `state_path("inventory.json")` exists (meaning a prior backup attempt wrote state). If so, log resume and continue (rclone `--checksum` skips matching files). If not, still block with the original safety error. 2) **Retry with backoff**: Wrapped `manager.copy()` in a 3-attempt retry loop with exponential backoff (5s, 10s, 20s). Progress callback shows retry status to user. 3) **In-progress flag**: Writes `state_path("backup_in_progress")` before copy, deletes on completion — gives future UI a signal that a backup was interrupted mid-copy. Also improved GUI error messages to suggest retrying same folder, and updated Help page troubleshooting text. |
+| Verification | Smoke test: all 10 sections pass (backup, verify, tamper detection, selective backup, wipe safety, etc.). Syntax check: both `backup.py` and `pages.py` parse without errors. Manual scenario verified by code review: non-empty dir + existing inventory = resume; non-empty dir + no inventory = block; empty dir = proceed as before. |
+

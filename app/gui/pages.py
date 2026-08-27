@@ -649,8 +649,11 @@ class BackupPage:
         self.progress.props(remove="indeterminate")
         self.progress.set_value(0)
         if error:
-            ui.notify(f"Backup failed: {error}", type="negative")
-            self.progress_label.set_text("Backup failed")
+            msg = str(error)
+            if "rclone exited" in msg or "timed out" in msg.lower():
+                msg += "\nYou can safely retry - already copied files will be skipped."
+            ui.notify(f"Backup failed: {msg}", type="negative", timeout=10000)
+            self.progress_label.set_text("Backup failed - can retry")
             return
         self.summary.set_text(
             f"Backup complete: {_fmt(result['files'])} files, "
@@ -1608,7 +1611,7 @@ Knowing where your data lives is key to staying organized.
 ### Troubleshooting Guide
 
 - **Connection failing?** Sign out of Google in your browser and try again. Or try Settings > Updates > reconnect.
-- **Folder must be empty?** DriveBackup refuses to mix backups to prevent data corruption. Select a brand new folder.
+- **Folder must be empty?** If a previous backup was interrupted, you can retry the same folder — DriveBackup will resume and skip already-copied files. If the folder has unrelated content, choose a new empty folder.
 - **Verify keeps failing?** Delete the specific failing file locally and re-run Backup. It will seamlessly resume and fix the manifest.
 - **SmartScreen warning?** This is normal for unsigned apps. Click "More info" > "Run anyway". Only fix is a paid code-signing cert.
 - **App won't update?** Close the app, then run the new installer manually. It will upgrade in place.
