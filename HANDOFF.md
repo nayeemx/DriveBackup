@@ -10,9 +10,9 @@ App: backup / verify / wipe files on your own Google Drive; per-file selection,
 disconnect account, AI analysis report (OpenRouter key optional).
 
 ## Current state (last session ended)
-- **Latest released version: v0.1.40** — live on GitHub
-  https://github.com/nayeemx/DriveBackup/releases/tag/v0.1.40
-  (source-only release; no installer built — patch fix only).
+- **Latest released version: v0.1.41** — live on GitHub
+  https://github.com/nayeemx/DriveBackup/releases/tag/v0.1.41
+- v0.1.41 fixes backup resume after interruption + retry on connection loss (PROBLEMS.md #20).
 - v0.1.40 fixes 500 Server Error: `StatCard.set_icon()` used wrong NiceGUI API (`.set_icon()` → `.set_name()`).
 - v0.1.39 fixes WipePage null safety and Connection icon updates.
 - v0.1.38 fixes Material Icons rendering (font-family override).
@@ -23,6 +23,17 @@ disconnect account, AI analysis report (OpenRouter key optional).
 - v0.1.33 fixes the in-app updater end-to-end (PROBLEMS.md #14).
 - **Installed app on this machine: v0.1.33** (will be upgraded by end-to-end verification).
 - Repo is PUBLIC — other people can download and install the app.
+
+## Session work (v0.1.41 — DONE, RELEASED)
+- **Bug fix: Backup resume after interruption** (PROBLEMS.md #20):
+  Backup failing at ~150MB due to connection loss, then retrying to same
+  folder failed with "Backup folder is not empty". Three-part fix:
+  1. Resume-aware gate: non-empty dir + existing inventory.json = resume
+  2. 3-attempt retry with exponential backoff (5s/10s/20s) around rclone copy
+  3. In-progress flag file for interrupted-backup detection
+  Plus improved GUI error messages and updated Help page.
+- **Files changed:** app/engine/backup.py, app/gui/pages.py, PROBLEMS.md
+- **Released:** https://github.com/nayeemx/DriveBackup/releases/tag/v0.1.41
 
 ## Session work (v0.1.34 — DONE, RELEASED)
 - **Bug fix: Verify hash mismatch** (PROBLEMS.md #15):

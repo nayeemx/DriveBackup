@@ -411,6 +411,7 @@ class RcloneManager:
             "--create-empty-src-dirs",
             "--checksum",
             "--fast-list",
+            "--local-encoding", "Colon,Asterisk,Question,DoubleQuote,LtGt,Pipe,Ctl",
             "--transfers", str(transfers),
             "--checkers", str(checkers),
             "--stats", "2s",
@@ -431,6 +432,7 @@ class RcloneManager:
         args = [
             "check", f"{remote}:{root}", str(local_dir),
             "--fast-list",
+            "--local-encoding", "Colon,Asterisk,Question,DoubleQuote,LtGt,Pipe,Ctl",
             "--transfers", str(transfers),
             "--checkers", str(checkers),
             "-v",

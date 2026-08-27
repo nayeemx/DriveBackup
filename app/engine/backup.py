@@ -238,7 +238,7 @@ def backup(remote: str, local_dir: Union[str, Path], transfers: int = 4,
     in_progress_flag = state_path("backup_in_progress")
     try:
         if files_only:
-            tmp_list = _write_files_list(files_only, local_dir.parent)
+            tmp_list = _write_files_list(files_only, Path(tempfile.gettempdir()))
         filters = _scope_filters(includes, excludes, files_only, tmp_list)
         in_progress_flag.write_text(now_iso(), encoding="utf-8")
         max_retries = 3
