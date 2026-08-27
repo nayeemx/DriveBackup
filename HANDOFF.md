@@ -10,10 +10,13 @@ App: backup / verify / wipe files on your own Google Drive; per-file selection,
 disconnect account, AI analysis report (OpenRouter key optional).
 
 ## Current state (last session ended)
-- **Latest released version: v0.1.41** — live on GitHub
-  https://github.com/nayeemx/DriveBackup/releases/tag/v0.1.41
+- **Latest released version: v0.1.44** — live on GitHub
+  https://github.com/nayeemx/DriveBackup/releases/tag/v0.1.44
+- v0.1.44 smart download strategy: scans files first, downloads safe files then tries problematic ones individually (PROBLEMS.md #21).
+- v0.1.43 adds `--backup-dir` for duplicate filename handling (PROBLEMS.md #21).
+- v0.1.42 adds `--local-encoding` for Windows-illegal characters in filenames (PROBLEMS.md #21).
 - v0.1.41 fixes backup resume after interruption + retry on connection loss (PROBLEMS.md #20).
-- v0.1.40 fixes 500 Server Error: `StatCard.set_icon()` used wrong NiceGUI API (`.set_icon()` → `.set_name()`).
+- v0.1.40 fixes 500 Server Error: `StatCard.set_icon()` used wrong NiceGUI API.
 - v0.1.39 fixes WipePage null safety and Connection icon updates.
 - v0.1.38 fixes Material Icons rendering (font-family override).
 - v0.1.37 adds Material Icons font import.
@@ -23,6 +26,23 @@ disconnect account, AI analysis report (OpenRouter key optional).
 - v0.1.33 fixes the in-app updater end-to-end (PROBLEMS.md #14).
 - **Installed app on this machine: v0.1.33** (will be upgraded by end-to-end verification).
 - Repo is PUBLIC — other people can download and install the app.
+
+## Session work (v0.1.42 → v0.1.44 — DONE, RELEASED)
+- **Bug fix: Windows-illegal characters in Google Drive filenames** (PROBLEMS.md #21):
+  Files with `:`, `*`, `Ø` etc. caused rclone copy to fail silently.
+  - v0.1.42: Added `--local-encoding` flag to rclone `copy()` and `check()` in
+    `rclone_manager.py`. Fixed temp file dir to use `tempfile.gettempdir()`.
+  - v0.1.43: Added `--backup-dir` (at `local_dir.parent / "_backup_conflicts"`)
+    for duplicate filenames in the same Drive folder.
+  - v0.1.44: **Smart download strategy** — scan inventory first, categorize files
+    as safe or problematic (illegal chars / duplicate names). Download safe files
+    in bulk with retry. Attempt problematic files one-by-one with per-file error
+    handling. Failures logged to `state/failed_files.json`. GUI shows skipped file
+    count in completion summary. Backup never fails completely.
+- **Files changed:** app/engine/backup.py (new `_scan_inventory()` function, rewritten
+  `backup()` with safe/problematic split), app/gui/pages.py (failed files display),
+  app/engine/rclone_manager.py (`--local-encoding`, `--backup-dir` flags)
+- **Released:** v0.1.44 — https://github.com/nayeemx/DriveBackup/releases/tag/v0.1.44
 
 ## Session work (v0.1.41 — DONE, RELEASED)
 - **Bug fix: Backup resume after interruption** (PROBLEMS.md #20):
@@ -140,11 +160,8 @@ disconnect account, AI analysis report (OpenRouter key optional).
 3. SmartScreen warning on first install (unsigned exe) — only fix is a paid code-signing cert.
 4. wipe_test.py hangs in dev env (test-env artifact, not an app bug).
 5. Optionally delete dead `app/gui/tabs.py` (customtkinter legacy, imported nowhere).
-6. Commit + push the v0.1.31..v0.1.33 changes (pages.py, updater.py, installer.iss,
-   HANDOFF.md, PROBLEMS.md) — repo is clean except these.
-7. (Optional) Test the IN-APP update flow once more when a newer release exists:
-   Settings -> Check for updates from the running v0.1.33 app (the installer-side
-   was verified; the app-side self-exit after launching the installer was code-reviewed).
+6. Install v0.1.44 and test with user's actual Google Drive (files with `:`, `Ø`, duplicates).
+7. (Optional) Test the IN-APP update flow once more when a newer release exists.
 
 ## Gotchas
 - Never probe the app on port 8080 (wslrelay). Use netstat for the DriveBackup process listener.
