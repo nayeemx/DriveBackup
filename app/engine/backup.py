@@ -205,15 +205,10 @@ def backup(remote: str, local_dir: Union[str, Path], transfers: int = 4,
 
     resuming = False
     if any(local_dir.iterdir()):
+        resuming = True
         inv_path = state_path("inventory.json")
-        if inv_path.exists():
-            resuming = True
-            LOG.info(f"Resuming previous backup into non-empty folder: {local_dir}")
-        else:
-            raise RcloneError(
-                f"Backup folder is not empty: {local_dir}\n"
-                "Choose an empty folder to keep the backup clean."
-            )
+        LOG.info(f"Resuming backup into non-empty folder: {local_dir} "
+                 f"(inventory: {'yes' if inv_path.exists() else 'no'})")
 
     if progress_cb:
         progress_cb(0, "Listing Drive contents ...")
