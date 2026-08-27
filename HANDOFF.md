@@ -39,9 +39,13 @@ disconnect account, AI analysis report (OpenRouter key optional).
     in bulk with retry. Attempt problematic files one-by-one with per-file error
     handling. Failures logged to `state/failed_files.json`. GUI shows skipped file
     count in completion summary. Backup never fails completely.
+  - **Post-release fix**: Removed redundant `--local-encoding` flag (rclone defaults
+    already handle all illegal chars — our explicit flag was stripping useful defaults
+    like Slash, BackSlash, RightPeriod). Fixed `_scan_inventory()` to check full path
+    for duplicates (not just filename). Verified: 548 files download successfully.
 - **Files changed:** app/engine/backup.py (new `_scan_inventory()` function, rewritten
   `backup()` with safe/problematic split), app/gui/pages.py (failed files display),
-  app/engine/rclone_manager.py (`--local-encoding`, `--backup-dir` flags)
+  app/engine/rclone_manager.py (`--backup-dir` flag, removed `--local-encoding`)
 - **Released:** v0.1.44 — https://github.com/nayeemx/DriveBackup/releases/tag/v0.1.44
 
 ## Session work (v0.1.41 — DONE, RELEASED)
