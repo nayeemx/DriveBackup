@@ -4,6 +4,7 @@ import os
 import re
 import tempfile
 import time
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +15,24 @@ from ..utils.config import format_bytes, state_path
 from ..utils.logging_utils import get_logger, now_iso
 
 LOG = get_logger()
+
+
+def _norm(path: str) -> str:
+    """Normalize path for consistent comparison (Unicode NFC + forward slashes)."""
+    return unicodedata.normalize("NFC", path).replace("\\", "/")
+
+
+def _sanitize_filename(path: str) -> str:
+    """Replace characters Windows can't handle in filenames."""
+    bad = set(':*?"<>|')
+    bad.add(chr(0x240A))
+    result = []
+    for ch in path:
+        if ch in bad:
+            result.append("_")
+        else:
+            result.append(ch)
+    return "".join(result)
 
 STATS_RE: re.Pattern[str] = re.compile(
     r"Transferred:\s+([\d.]+)\s*/\s*([\d.]+)\s+([A-Za-z]+),\s+([\d.]+)%"
@@ -40,11 +59,11 @@ def _walk_local(local_dir: Path, workers: int = 8) -> Dict[str, Any]:
         try:
             size = path.stat().st_size
             md5 = md5_of_file(path)
-            return str(path.relative_to(local_dir)).replace("\\", "/"), {
+            return _norm(str(path.relative_to(local_dir))), {
                 "size": size, "md5": md5,
             }
         except OSError as exc:
-            return str(path.relative_to(local_dir)).replace("\\", "/"), {
+            return _norm(str(path.relative_to(local_dir))), {
                 "size": -1, "md5": None, "error": str(exc),
             }
 
@@ -295,7 +314,7 @@ def backup(remote: str, local_dir: Union[str, Path], transfers: int = 4,
                         break
                     except RcloneError as exc:
                         if attempt < max_retries - 1:
-                            wait = 5 * (2 ** attempt)
+                            wait = 30 * (2 ** attempt)
                             LOG.warning(f"Safe batch failed (attempt {attempt + 1}/{max_retries}): {exc}")
                             if progress_cb:
                                 progress_cb(None, f"Connection lost. Retrying in {wait}s ... ({attempt + 1}/{max_retries})")
@@ -317,12 +336,24 @@ def backup(remote: str, local_dir: Union[str, Path], transfers: int = 4,
                 if progress_cb:
                     progress_cb(0.5 + 0.45 * (i / len(problem_files)),
                                 f"Trying problematic file {i+1}/{len(problem_files)}: {path}")
-                tmp_prob = _write_files_list([path], Path(tempfile.gettempdir()))
+
+                safe_name = _sanitize_filename(path)
+                tmp_dir = Path(tempfile.mkdtemp(prefix="db_prob_"))
+                tmp_prob = _write_files_list([path], tmp_dir)
                 try:
-                    manager.copy(remote, local_dir, transfers, checkers,
+                    manager.copy(remote, tmp_dir, transfers, checkers,
                                  on_line, root=root,
                                  extra_args=["--files-from-raw", tmp_prob],
                                  gphotos_proxy=gphotos_proxy)
+                    downloaded = list(tmp_dir.rglob("*"))
+                    for f in downloaded:
+                        if f.is_file():
+                            target = local_dir / safe_name
+                            target.parent.mkdir(parents=True, exist_ok=True)
+                            if target.exists():
+                                target = local_dir / f"{safe_name}_{i}"
+                            f.rename(target)
+                            LOG.info(f"Problematic file saved as: {target}")
                 except RcloneError as exc:
                     LOG.warning(f"Skipping {path}: {reason} - {exc}")
                     failed_files.append({"path": path, "reason": reason, "error": str(exc)})
@@ -331,6 +362,8 @@ def backup(remote: str, local_dir: Union[str, Path], transfers: int = 4,
                         os.unlink(tmp_prob)
                     except OSError:
                         pass
+                    import shutil
+                    shutil.rmtree(tmp_dir, ignore_errors=True)
 
     finally:
         try:
@@ -351,6 +384,7 @@ def backup(remote: str, local_dir: Union[str, Path], transfers: int = 4,
     result_files: List[dict[str, Any]] = []
     for item in inventory:
         path = item.get("Path") or item.get("Name")
+        norm_path = _norm(path)
         size = item.get("Size", 0)
         md5 = _drive_md5(item)
         mime = item.get("MimeType", "")
@@ -359,13 +393,18 @@ def backup(remote: str, local_dir: Union[str, Path], transfers: int = 4,
         if exported:
             stem = os.path.splitext(path)[0]
             ext = EXPORT_EXTS.get(mime, "docx")
-            cand = f"{stem}.{ext}"
+            cand = _norm(f"{stem}.{ext}")
             for local_path in local:
-                if local_path == cand or local_path == path:
+                if _norm(local_path) == cand or _norm(local_path) == norm_path:
                     local_meta = local[local_path]
                     break
         else:
-            local_meta = local.get(path)
+            local_meta = local.get(norm_path)
+            if local_meta is None:
+                for lp, lm in local.items():
+                    if _norm(lp) == norm_path:
+                        local_meta = lm
+                        break
         result_files.append({
             "path": path,
             "size": size,

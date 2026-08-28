@@ -171,6 +171,7 @@ class RcloneManager:
         if not self.exe or not self.exe.exists():
             self.ensure_binary()
         cmd = [str(self.exe), "--config", str(self._token_path)] + args
+        LOG.debug(f"rclone stream: {' '.join(cmd)}")
         proc = subprocess.Popen(
             cmd,
             stdin=subprocess.DEVNULL,
@@ -181,11 +182,15 @@ class RcloneManager:
             errors="replace",
             **_no_window_kwargs(),
         )
+        last_lines: list[str] = []
         try:
             for raw in proc.stdout:
                 line = raw.rstrip("\r\n")
                 if line:
                     line_cb(line)
+                    last_lines.append(line)
+                    if len(last_lines) > 20:
+                        last_lines.pop(0)
         finally:
             try:
                 proc.stdout.close()
@@ -197,7 +202,10 @@ class RcloneManager:
                 proc.kill()
                 raise RcloneError("rclone process timed out")
         if proc.returncode != 0:
-            raise RcloneError(f"rclone exited with code {proc.returncode}")
+            tail = "\n".join(last_lines[-5:]) if last_lines else "(no output)"
+            raise RcloneError(
+                f"rclone exited with code {proc.returncode}.\n"
+                f"Last output:\n{tail}")
         return True
 
     # ------------------------------------------------------------------ remote

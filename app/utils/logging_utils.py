@@ -1,5 +1,6 @@
 import logging
 import logging.handlers
+import os
 import sys
 from datetime import datetime
 from typing import Callable, Optional
@@ -29,6 +30,26 @@ class ConsoleHandler(logging.Handler):
             print(msg, file=sys.stderr)
 
 
+class SafeRotatingFileHandler(logging.handlers.RotatingFileHandler):
+    """RotatingFileHandler that never crashes on rotation errors."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            super().emit(record)
+        except Exception:
+            try:
+                self.stream.write(self.format(record) + self.terminator)
+                self.stream.flush()
+            except Exception:
+                pass
+
+    def doRollover(self) -> None:
+        try:
+            super().doRollover()
+        except Exception:
+            pass
+
+
 _logger = logging.getLogger("drivebackup")
 _logger.setLevel(logging.INFO)
 _logger.propagate = False
@@ -36,7 +57,7 @@ _logger.propagate = False
 _fmt = logging.Formatter(
     "%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S"
 )
-_file_handler = logging.handlers.RotatingFileHandler(
+_file_handler = SafeRotatingFileHandler(
     LOG_FILE, encoding="utf-8", maxBytes=5 * 1024 * 1024, backupCount=3
 )
 _file_handler.setFormatter(_fmt)
